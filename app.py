@@ -1,7 +1,8 @@
 """Main Streamlit application for SCTP Job Recommender & Skill Gap Analyzer."""
 import streamlit as st
 import json
-from typing import Dict, Any, List
+import re
+from typing import Dict, Any, List, Optional, Tuple
 from config import (
     APP_TITLE,
     DEFAULT_KEYWORDS,
@@ -11,8 +12,8 @@ from config import (
     GEMINI_API_KEY,
     GEMINI_MODEL_NAME,
 )
-from services.llm_client import GeminiClient
-from services.findsgjobs_client import fetch_all_findsgjobs, normalize_job
+from services.llm_client import GeminiClient, list_available_models, get_gemini_rate_limit_status
+from services.findsgjobs_client import fetch_all_findsgjobs, normalize_job, get_rate_limit_status
 from services.resume_parser import parse_resume
 from agents.junior_researchers import extract_profile_from_resume_text
 from agents.schemas import UserProfile
@@ -39,6 +40,11 @@ if "user_profile" not in st.session_state:
         "experience": [],
         "education": [],
         "target_roles": [],
+        "experience_level": None,
+        "location": None,
+        "salary_range_min": None,
+        "salary_range_max": None,
+        "salary_currency": "SGD",
     }
 
 if "jobs_raw" not in st.session_state:
@@ -50,35 +56,105 @@ if "ai_results" not in st.session_state:
 if "llm_client" not in st.session_state:
     st.session_state["llm_client"] = None
 
+if "job_listings_page" not in st.session_state:
+    st.session_state["job_listings_page"] = 1
 
-def initialize_llm_client() -> GeminiClient:
-    """Initialize and cache LLM client."""
+# Track active tab to preserve it across reruns
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = 1  # Default to Profile tab (index 0)
+
+# Store search keywords for URL construction
+if "search_keywords" not in st.session_state:
+    st.session_state["search_keywords"] = ""
+
+
+def initialize_llm_client() -> Tuple[Optional[GeminiClient], str, str]:
+    """
+    Initialize and cache LLM client.
+    
+    Returns:
+        Tuple of (client, api_key, model_name) for use in UI
+    """
+    # Get API key and model name from sidebar inputs
+    api_key = st.sidebar.text_input(
+        "Gemini API Key",
+        value=GEMINI_API_KEY,
+        type="password",
+        help="Enter your Google Gemini API key",
+        key="gemini_api_key_input",
+    )
+    
+    model_name = st.sidebar.text_input(
+        "Model Name",
+        value=GEMINI_MODEL_NAME,
+        help="Gemini model to use (e.g., gemini-1.5-pro, gemini-1.5-flash)",
+        key="gemini_model_name_input",
+    )
+    
+    # Check if we need to reinitialize the client (API key or model changed)
+    need_reinit = False
     if st.session_state["llm_client"] is None:
+        need_reinit = True
+    else:
+        # Check if API key or model name changed
+        cached_client = st.session_state["llm_client"]
+        if hasattr(cached_client, 'api_key'):
+            if cached_client.api_key != api_key:
+                need_reinit = True
+        else:
+            need_reinit = True
+            
+        if hasattr(cached_client, 'model_name'):
+            if cached_client.model_name != model_name:
+                need_reinit = True
+        else:
+            need_reinit = True
+    
+    if need_reinit:
+        if not api_key:
+            st.sidebar.warning("⚠️ Please enter your Gemini API key in the sidebar")
+            return None, api_key, model_name
+        
         try:
-            api_key = st.sidebar.text_input(
-                "Gemini API Key",
-                value=GEMINI_API_KEY,
-                type="password",
-                help="Enter your Google Gemini API key",
-            )
-            if not api_key:
-                st.sidebar.warning("⚠️ Please enter your Gemini API key in the sidebar")
-                return None
-            
-            model_name = st.sidebar.text_input(
-                "Model Name",
-                value=GEMINI_MODEL_NAME,
-                help="Gemini model to use (e.g., gemini-pro)",
-            )
-            
             client = GeminiClient(api_key=api_key, model_name=model_name)
             st.session_state["llm_client"] = client
             st.sidebar.success("✅ LLM client initialized")
-            return client
+            return client, api_key, model_name
         except Exception as e:
-            st.sidebar.error(f"❌ Failed to initialize LLM: {str(e)}")
-            return None
-    return st.session_state["llm_client"]
+            error_msg = str(e)
+            st.sidebar.error(f"❌ Failed to initialize LLM: {error_msg}")
+            # Show helpful suggestions if model not found
+            if "404" in error_msg or "not found" in error_msg.lower():
+                st.sidebar.warning("⚠️ Model not found. Trying to list available models...")
+                try:
+                    with st.spinner("Fetching available models..."):
+                        available_models = list_available_models(api_key)
+                        if available_models:
+                            st.sidebar.success(f"✅ Found {len(available_models)} available models:")
+                            # Show first few models
+                            for model in available_models[:5]:
+                                st.sidebar.code(model)
+                            if len(available_models) > 5:
+                                st.sidebar.caption(f"... and {len(available_models) - 5} more")
+                            # Suggest the first available model
+                            suggested_model = available_models[0]
+                            st.sidebar.info(
+                                f"💡 **Try this model**: `{suggested_model}`\n"
+                                f"Update the 'Model Name' field above and click '🔄 Reset LLM Client'"
+                            )
+                        else:
+                            st.sidebar.warning("No models found. Check your API key.")
+                except Exception as list_error:
+                    st.sidebar.error(f"Could not list models: {str(list_error)}")
+                    st.sidebar.info(
+                        "💡 **Manual fix**:\n"
+                        "- Try 'gemini-pro' (older model)\n"
+                        "- Or check Google's documentation for available models\n"
+                        "- Make sure your API key has access to Gemini models"
+                    )
+            return None, api_key, model_name
+    
+    return st.session_state["llm_client"], api_key, model_name
 
 
 def main():
@@ -92,10 +168,32 @@ def main():
         
         # LLM Config
         st.subheader("LLM Settings")
-        llm_client = initialize_llm_client()
+        llm_client, api_key_input, model_name_input = initialize_llm_client()
         
         if llm_client:
-            st.text(f"Model: {GEMINI_MODEL_NAME}")
+            st.text(f"Model: {llm_client.model_name}")
+        
+        # Show available models button
+        if st.button("📋 List Available Models"):
+            try:
+                api_key = api_key_input or GEMINI_API_KEY
+                if api_key:
+                    with st.spinner("Fetching available models..."):
+                        models = list_available_models(api_key)
+                        st.success(f"Found {len(models)} available models:")
+                        st.code("\n".join(models))
+                        st.info("💡 Copy one of these model names to the 'Model Name' field above")
+                else:
+                    st.warning("Please enter API key in the 'Gemini API Key' field above first")
+            except Exception as e:
+                st.error(f"Error listing models: {str(e)}")
+                st.info("💡 Make sure you've entered a valid API key above")
+        
+        # Reset LLM client button
+        if st.session_state["llm_client"] is not None:
+            if st.button("🔄 Reset LLM Client", help="Clear cached client and reinitialize with current settings"):
+                st.session_state["llm_client"] = None
+                st.rerun()
         
         st.markdown("---")
         
@@ -128,14 +226,57 @@ def main():
             options=[""] + salary_interval_options,
             help="Salary interval",
         )
+        
+        # Rate Limit Status
+        st.markdown("---")
+        st.subheader("📊 API Rate Limit Status")
+        
+        # FindSGJobs Rate Limit
+        rate_status = get_rate_limit_status()
+        remaining = rate_status["remaining_requests"]
+        total = rate_status["rate_limit"]
+        
+        st.markdown("**FindSGJobs API:**")
+        if remaining > total * 0.5:
+            st.success(f"✅ {remaining}/{total} requests remaining")
+        elif remaining > total * 0.2:
+            st.warning(f"⚠️ {remaining}/{total} requests remaining")
+        else:
+            st.error(f"🔴 {remaining}/{total} requests remaining")
+        
+        st.caption(f"Rate limit: {total} requests per {rate_status['window_seconds']} seconds (per IP)")
+        
+        # Gemini API Rate Limit
+        if llm_client and hasattr(llm_client, 'model_name'):
+            st.markdown("**Gemini API:**")
+            gemini_status = get_gemini_rate_limit_status(llm_client.model_name)
+            gemini_remaining = gemini_status["remaining_requests"]
+            gemini_total = gemini_status["rate_limit"]
+            
+            if gemini_remaining > gemini_total * 0.5:
+                st.success(f"✅ {gemini_remaining}/{gemini_total} requests remaining ({llm_client.model_name})")
+            elif gemini_remaining > gemini_total * 0.2:
+                st.warning(f"⚠️ {gemini_remaining}/{gemini_total} requests remaining ({llm_client.model_name})")
+            else:
+                st.error(f"🔴 {gemini_remaining}/{gemini_total} requests remaining ({llm_client.model_name})")
+            
+            st.caption(f"Free tier limit: {gemini_total} requests per minute per model")
+            if gemini_remaining < 3:
+                st.warning("⚠️ Low Gemini API quota remaining. The system will automatically retry with delays if rate limited.")
+        
+        st.info("💡 Tip: APIs automatically throttle requests to stay within limits.")
     
     # Main content tabs
+    # Use a unique key to preserve tab state
     tab1, tab2, tab3, tab4 = st.tabs([
         "👤 Profile",
         "🔍 Job Search & Recommendations",
         "📊 Skill Gap Analysis",
         "🐛 Debug / Raw Data",
     ])
+    
+    # Note: Streamlit tabs don't have a direct way to programmatically set active tab
+    # But we can track which tab content is being rendered
     
     # Tab 1: Profile
     with tab1:
@@ -174,6 +315,8 @@ def main():
         
         profile = st.session_state["user_profile"]
         
+        # Basic Information
+        st.markdown("#### Basic Information")
         col1, col2 = st.columns(2)
         
         with col1:
@@ -182,16 +325,73 @@ def main():
             summary = st.text_area("Summary", value=profile.get("summary") or "", height=100)
         
         with col2:
+            # Ensure skills and target_roles are lists (handle None case)
+            skills_list = profile.get("skills") or []
+            if not isinstance(skills_list, list):
+                skills_list = []
+            
+            target_roles_list = profile.get("target_roles") or []
+            if not isinstance(target_roles_list, list):
+                target_roles_list = []
+            
             skills_text = st.text_area(
                 "Skills (comma-separated)",
-                value=", ".join(profile.get("skills", [])),
+                value=", ".join(skills_list),
                 help="Enter skills separated by commas",
             )
             target_roles_text = st.text_area(
                 "Target Roles (comma-separated)",
-                value=", ".join(profile.get("target_roles", [])),
+                value=", ".join(target_roles_list),
                 help="Enter target job roles separated by commas",
             )
+        
+        st.markdown("---")
+        st.markdown("#### Job Preferences")
+        
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            experience_level_options = ["", "Entry Level", "Junior", "Mid-Level", "Senior", "Lead", "Executive"]
+            experience_level = st.selectbox(
+                "Experience Level",
+                options=experience_level_options,
+                index=experience_level_options.index(profile.get("experience_level", "")) if profile.get("experience_level") in experience_level_options else 0,
+                help="Your current experience level"
+            )
+            
+            location = st.text_input(
+                "Preferred Location",
+                value=profile.get("location") or "",
+                help="Preferred work location (e.g., Singapore, Remote, etc.)",
+                placeholder="e.g., Singapore, Remote, Central Singapore"
+            )
+        
+        with col4:
+            salary_currency_options = ["SGD", "USD", "MYR", "IND"]
+            salary_currency = st.selectbox(
+                "Salary Currency",
+                options=salary_currency_options,
+                index=salary_currency_options.index(profile.get("salary_currency", "SGD")) if profile.get("salary_currency") in salary_currency_options else 0,
+                help="Currency for salary expectations"
+            )
+            
+            col_sal_min, col_sal_max = st.columns(2)
+            with col_sal_min:
+                salary_range_min = st.number_input(
+                    "Min Salary",
+                    min_value=0,
+                    value=profile.get("salary_range_min") or 0,
+                    step=1000,
+                    help="Minimum expected salary"
+                )
+            with col_sal_max:
+                salary_range_max = st.number_input(
+                    "Max Salary",
+                    min_value=0,
+                    value=profile.get("salary_range_max") or 0,
+                    step=1000,
+                    help="Maximum expected salary (0 = no limit)"
+                )
         
         if st.button("💾 Save Profile"):
             st.session_state["user_profile"] = {
@@ -202,6 +402,11 @@ def main():
                 "experience": profile.get("experience", []),
                 "education": profile.get("education", []),
                 "target_roles": [r.strip() for r in target_roles_text.split(",") if r.strip()],
+                "experience_level": experience_level if experience_level else None,
+                "location": location if location else None,
+                "salary_range_min": salary_range_min if salary_range_min > 0 else None,
+                "salary_range_max": salary_range_max if salary_range_max > 0 else None,
+                "salary_currency": salary_currency,
             }
             st.success("✅ Profile saved!")
     
@@ -224,47 +429,454 @@ def main():
         with col2:
             max_pages = st.number_input("Max Pages", min_value=1, max_value=10, value=3)
         
+        # Show rate limit warning if needed
+        rate_status = get_rate_limit_status()
+        if rate_status["remaining_requests"] < max_pages:
+            st.warning(
+                f"⚠️ Rate Limit Warning: Only {rate_status['remaining_requests']} requests remaining. "
+                f"You're requesting {max_pages} pages. The system will automatically throttle, "
+                f"but this may take longer."
+            )
+        
         if st.button("🔍 Fetch Jobs from FindSGJobs"):
-            with st.spinner("Fetching jobs..."):
-                try:
-                    kwargs = {"keywords": keywords_input, "max_pages": max_pages}
-                    
-                    if selected_employment_types:
-                        kwargs["employment_types"] = [
-                            EMPLOYMENT_TYPES[et] for et in selected_employment_types
-                        ]
-                    
-                    if min_salary > 0:
-                        kwargs["min_salary"] = min_salary
-                        kwargs["currency_id"] = CURRENCIES.get("SGD")
-                    
-                    if salary_interval:
-                        kwargs["salary_interval_id"] = SALARY_INTERVALS.get(salary_interval)
-                    
-                    jobs = fetch_all_findsgjobs(**kwargs)
-                    st.session_state["jobs_raw"] = jobs
-                    st.success(f"✅ Fetched {len(jobs)} jobs!")
-                except Exception as e:
-                    st.error(f"❌ Error fetching jobs: {str(e)}")
-                    logger.error(f"Job fetch error: {str(e)}")
+            # Validate keywords
+            if not keywords_input or not keywords_input.strip():
+                st.error("❌ Please enter keywords to search for jobs.")
+                st.info("💡 Keywords cannot be empty. Enter job titles, skills, or company names.")
+            else:
+                with st.spinner("Fetching jobs... (Rate limited to 60 requests/minute)"):
+                    try:
+                        keywords = keywords_input.strip()
+                        kwargs = {"keywords": keywords, "max_pages": max_pages}
+                        
+                        if selected_employment_types:
+                            kwargs["employment_types"] = [
+                                EMPLOYMENT_TYPES[et] for et in selected_employment_types
+                            ]
+                        
+                        if min_salary > 0:
+                            kwargs["min_salary"] = min_salary
+                            kwargs["currency_id"] = CURRENCIES.get("SGD")
+                        
+                        if salary_interval:
+                            kwargs["salary_interval_id"] = SALARY_INTERVALS.get(salary_interval)
+                        
+                        jobs = fetch_all_findsgjobs(**kwargs)
+                        st.session_state["jobs_raw"] = jobs
+                        st.session_state["job_listings_page"] = 1  # Reset to first page when new jobs are fetched
+                        st.session_state["search_keywords"] = keywords  # Store keywords for URL construction
+                        
+                        if len(jobs) == 0:
+                            st.warning(
+                                "⚠️ No jobs found. This could mean:\n"
+                                "- The API returned an empty result\n"
+                                "- The response structure is different than expected\n"
+                                "- Check the Debug tab to see the raw API response"
+                            )
+                        else:
+                            st.success(f"✅ Fetched {len(jobs)} jobs!")
+                        
+                        # Show updated rate limit status
+                        new_rate_status = get_rate_limit_status()
+                        st.caption(
+                            f"Remaining API requests: {new_rate_status['remaining_requests']}/"
+                            f"{new_rate_status['rate_limit']}"
+                        )
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "429" in error_msg or "Rate limit" in error_msg:
+                            st.error(
+                                f"❌ Rate limit exceeded! Please wait a minute before trying again. "
+                                f"Error: {error_msg}"
+                            )
+                        else:
+                            st.error(f"❌ Error fetching jobs: {error_msg}")
+                            st.info("💡 Check the Debug tab for more details about the API response.")
+                        logger.error(f"Job fetch error: {error_msg}")
         
         # Step 2: Display Jobs
         if st.session_state["jobs_raw"]:
             st.subheader(f"Step 2: Job Listings ({len(st.session_state['jobs_raw'])} jobs)")
             
-            for idx, job_raw in enumerate(st.session_state["jobs_raw"][:20]):  # Show first 20
-                try:
-                    job = normalize_job(job_raw)
-                    with st.expander(f"📋 {job['title']} - {job['company']}"):
-                        st.write(f"**Location:** {job['location']}")
-                        if job.get("salary_text"):
-                            st.write(f"**Salary:** {job['salary_text']}")
-                        st.write(f"**Description:** {job['description'][:500]}...")
-                        if job.get("url"):
-                            st.markdown(f"[View Job →]({job['url']})")
-                except Exception as e:
-                    logger.warning(f"Error displaying job {idx}: {str(e)}")
-                    continue
+            # Add global CSS styles
+            st.markdown(
+                """
+                <style>
+                .job-card-container {
+                    border: 1px solid #e1e5e9;
+                    border-radius: 12px;
+                    padding: 20px;
+                    margin-bottom: 20px;
+                    background-color: #ffffff;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+                    transition: all 0.3s ease;
+                }
+                .job-card-container:hover {
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+                    transform: translateY(-2px);
+                }
+                .job-row-container {
+                    border: 1px solid #e1e5e9;
+                    border-radius: 8px;
+                    padding: 16px;
+                    margin-bottom: 12px;
+                    background-color: #ffffff;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                }
+                .job-title {
+                    font-size: 1.2em;
+                    font-weight: 600;
+                    color: #1a1a1a;
+                    margin-bottom: 8px;
+                }
+                .job-company {
+                    font-size: 1em;
+                    color: #4a5568;
+                    font-weight: 500;
+                }
+                .job-meta {
+                    font-size: 0.9em;
+                    color: #718096;
+                    margin-top: 8px;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # Display mode selector
+            display_mode = st.radio(
+                "Display Mode",
+                ["Table View", "Card View"],
+                horizontal=True,
+                key="job_display_mode",
+                index=0  # Default to Table View
+            )
+            
+            # Pagination settings
+            jobs_per_page = 10
+            total_jobs = len(st.session_state["jobs_raw"])
+            total_pages = max(1, (total_jobs + jobs_per_page - 1) // jobs_per_page)  # Ceiling division
+            
+            # Ensure current page is valid
+            if st.session_state["job_listings_page"] > total_pages:
+                st.session_state["job_listings_page"] = 1
+            
+            # Pagination controls (only show if there are jobs)
+            if total_jobs > 0:
+                current_page = st.session_state["job_listings_page"]
+                
+                # Add custom CSS for better pagination styling
+                st.markdown(
+                    """
+                    <style>
+                    .pagination-container {
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 15px;
+                        padding: 15px 0;
+                        background-color: #f8f9fa;
+                        border-radius: 8px;
+                        margin: 10px 0;
+                    }
+                    .pagination-info {
+                        font-size: 14px;
+                        color: #495057;
+                        font-weight: 500;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True
+                )
+                
+                # Define callback functions for pagination buttons
+                # Calculate total_pages inside callbacks since they can't access local variables
+                # Note: Streamlit automatically reruns when session state changes in callbacks
+                # We don't need explicit st.rerun() - it causes tab navigation issues
+                def go_to_prev_page():
+                    jobs_count = len(st.session_state.get("jobs_raw", []))
+                    jobs_per_page_local = 10
+                    total_pages_local = max(1, (jobs_count + jobs_per_page_local - 1) // jobs_per_page_local)
+                    current = st.session_state.get("job_listings_page", 1)
+                    if current > 1:
+                        st.session_state["job_listings_page"] = current - 1
+                        # Don't call st.rerun() here - Streamlit handles it automatically
+                
+                def go_to_next_page():
+                    jobs_count = len(st.session_state.get("jobs_raw", []))
+                    jobs_per_page_local = 10
+                    total_pages_local = max(1, (jobs_count + jobs_per_page_local - 1) // jobs_per_page_local)
+                    current = st.session_state.get("job_listings_page", 1)
+                    if current < total_pages_local:
+                        st.session_state["job_listings_page"] = current + 1
+                        # Don't call st.rerun() here - Streamlit handles it automatically
+                
+                # Main pagination row
+                col_page1, col_page2, col_page3 = st.columns([2, 3, 2])
+                
+                with col_page1:
+                    prev_disabled = current_page <= 1
+                    st.button(
+                        "◀ Previous", 
+                        disabled=prev_disabled, 
+                        width='stretch',
+                        key="prev_page_button",
+                        type="secondary",
+                        on_click=go_to_prev_page
+                    )
+                
+                with col_page2:
+                    # Center section with page info and selector
+                    st.markdown(
+                        f'<div style="text-align: center; padding: 10px 0;">'
+                        f'<div class="pagination-info">Page <strong>{current_page}</strong> of <strong>{total_pages}</strong></div>'
+                        f'<div style="font-size: 12px; color: #6c757d; margin-top: 5px;">{total_jobs} total jobs</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Page selector in a centered container
+                    col_sel1, col_sel2, col_sel3 = st.columns([1, 1, 1])
+                    with col_sel2:
+                        selected_page = st.number_input(
+                            "Go to page",
+                            min_value=1,
+                            max_value=total_pages,
+                            value=current_page,
+                            key="page_selector",
+                            label_visibility="collapsed"
+                        )
+                        if selected_page != current_page:
+                            st.session_state["job_listings_page"] = selected_page
+                            st.rerun()
+                
+                with col_page3:
+                    next_disabled = current_page >= total_pages
+                    st.button(
+                        "Next ▶", 
+                        disabled=next_disabled, 
+                        width='stretch',
+                        key="next_page_button",
+                        type="primary",
+                        on_click=go_to_next_page
+                    )
+                
+                # Jobs per page info (subtle, below pagination)
+                st.caption(f"📄 Showing {jobs_per_page} jobs per page")
+                st.markdown("---")
+            
+            # Calculate jobs to display for current page
+            current_page = st.session_state["job_listings_page"]
+            start_idx = (current_page - 1) * jobs_per_page
+            end_idx = start_idx + jobs_per_page
+            jobs_to_display = st.session_state["jobs_raw"][start_idx:end_idx]
+            
+            # Show current page info
+            if total_jobs > 0:
+                st.caption(f"Showing jobs {start_idx + 1} to {min(end_idx, total_jobs)} of {total_jobs}")
+                st.markdown("---")
+            
+            if display_mode == "Table View":
+                # Table View - Clean list format
+                import pandas as pd
+                
+                for idx, job_raw in enumerate(jobs_to_display):
+                    try:
+                        job = normalize_job(job_raw)
+                        
+                        # Create a clean row
+                        with st.container():
+                            col_img, col_info, col_action = st.columns([0.8, 4, 1.2])
+                            
+                            with col_img:
+                                company_name = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
+                                
+                                if job.get("image_url"):
+                                    try:
+                                        st.image(
+                                            job["image_url"], 
+                                            width=80
+                                        )
+                                    except:
+                                        st.markdown(
+                                            f"<div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white;'>"
+                                            f"<div style='font-size: 24px;'>{company_name[0].upper() if company_name else '?'}</div></div>",
+                                            unsafe_allow_html=True
+                                        )
+                                else:
+                                    st.markdown(
+                                        f"<div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white;'>"
+                                        f"<div style='font-size: 24px;'>{company_name[0].upper() if company_name else '?'}</div></div>",
+                                        unsafe_allow_html=True
+                                    )
+                            
+                            with col_info:
+                                job_title = str(job.get('title', 'N/A')) if job.get('title') else 'N/A'
+                                job_company = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
+                                job_location = str(job.get('location', 'N/A')) if job.get('location') else 'N/A'
+                                
+                                st.markdown(f"**{job_title}**")
+                                st.markdown(f"*{job_company}* • 📍 {job_location}")
+                                
+                                # Meta info
+                                meta_parts = []
+                                if job.get("salary_text"):
+                                    meta_parts.append(f"💰 {job['salary_text']}")
+                                if job.get("category"):
+                                    meta_parts.append(f"🏷️ {job['category']}")
+                                
+                                if meta_parts:
+                                    st.caption(" • ".join(meta_parts))
+                                
+                                # Description preview
+                                job_description = str(job.get('description', '')) if job.get('description') else ''
+                                desc_preview = (job_description[:120] + "...") if len(job_description) > 120 else job_description
+                                if desc_preview:
+                                    st.caption(desc_preview)
+                            
+                            with col_action:
+                                st.markdown("<br>", unsafe_allow_html=True)
+                                # Construct URL using search keywords
+                                search_keywords = st.session_state.get("search_keywords", "")
+                                if search_keywords:
+                                    # URL encode the keywords (replace spaces with +)
+                                    keywords_encoded = search_keywords.replace(" ", "+")
+                                    job_url = f"https://www.findsgjobs.com/jobs?keywords={keywords_encoded}"
+                                    st.markdown(
+                                        f'<a href="{job_url}" target="_blank" style="text-decoration: none;">'
+                                        f'<button style="background-color: #1f77b4; color: white; border: none; '
+                                        f'padding: 8px 16px; border-radius: 4px; cursor: pointer; width: 100%;">'
+                                        f'View Job</button></a>',
+                                        unsafe_allow_html=True
+                                    )
+                                elif job.get("url"):
+                                    st.markdown(
+                                        f'<a href="{job["url"]}" target="_blank" style="text-decoration: none;">'
+                                        f'<button style="background-color: #1f77b4; color: white; border: none; '
+                                        f'padding: 8px 16px; border-radius: 4px; cursor: pointer; width: 100%;">'
+                                        f'View Job</button></a>',
+                                        unsafe_allow_html=True
+                                    )
+                                
+                                with st.expander("Details"):
+                                    st.write("**Full Description:**")
+                                    st.write(job_description if job_description else "No description available")
+                                    # Use search keywords URL
+                                    search_keywords_expander = st.session_state.get("search_keywords", "")
+                                    if search_keywords_expander:
+                                        keywords_encoded = search_keywords_expander.replace(" ", "+")
+                                        job_url_expander = f"https://www.findsgjobs.com/jobs?keywords={keywords_encoded}"
+                                        st.markdown(f'<a href="{job_url_expander}" target="_blank">View Full Posting →</a>', unsafe_allow_html=True)
+                                    elif job.get("url"):
+                                        st.markdown(f'<a href="{job["url"]}" target="_blank">View Full Posting →</a>', unsafe_allow_html=True)
+                            
+                            if idx < len(jobs_to_display) - 1:
+                                st.divider()
+                                
+                    except Exception as e:
+                        logger.warning(f"Error displaying job {idx}: {str(e)}")
+                        continue
+            else:
+                # Card View - Clean grid layout
+                jobs_per_row = 2
+                for i in range(0, len(jobs_to_display), jobs_per_row):
+                    cols = st.columns(jobs_per_row, gap="medium")
+                    for j, col in enumerate(cols):
+                        idx = i + j
+                        if idx < len(jobs_to_display):
+                            try:
+                                job_raw = jobs_to_display[idx]
+                                job = normalize_job(job_raw)
+                                
+                                with col:
+                                    # Card container with border
+                                    with st.container():
+                                        # Image/Logo section
+                                        if job.get("image_url"):
+                                            try:
+                                                st.image(
+                                                    job["image_url"], 
+                                                    width='stretch',
+                                                    caption=str(job.get('company', ''))[:30]
+                                                )
+                                            except:
+                                                company_name = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
+                                                st.markdown(
+                                                    f"<div style='text-align: center; padding: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white; margin-bottom: 15px;'>"
+                                                    f"<div style='font-size: 36px; font-weight: bold;'>{company_name[0].upper() if company_name else '?'}</div>"
+                                                    f"<div style='font-size: 14px; margin-top: 5px;'>{company_name[:20]}</div></div>",
+                                                    unsafe_allow_html=True
+                                                )
+                                        else:
+                                            company_name = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
+                                            st.markdown(
+                                                f"<div style='text-align: center; padding: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white; margin-bottom: 15px;'>"
+                                                f"<div style='font-size: 36px; font-weight: bold;'>{company_name[0].upper() if company_name else '?'}</div>"
+                                                f"<div style='font-size: 14px; margin-top: 5px;'>{company_name[:20]}</div></div>",
+                                                unsafe_allow_html=True
+                                            )
+                                        
+                                        # Title
+                                        job_title = str(job.get('title', 'N/A')) if job.get('title') else 'N/A'
+                                        st.markdown(f"### {job_title}")
+                                        
+                                        # Company and location
+                                        job_company = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
+                                        job_location = str(job.get('location', 'N/A')) if job.get('location') else 'N/A'
+                                        st.markdown(f"**{job_company}**")
+                                        st.caption(f"📍 {job_location}")
+                                        
+                                        # Salary and category
+                                        if job.get("salary_text"):
+                                            st.markdown(f"💰 **{job['salary_text']}**")
+                                        if job.get("category"):
+                                            st.caption(f"🏷️ {job['category']}")
+                                        
+                                        st.divider()
+                                        
+                                        # Description preview
+                                        job_description = str(job.get('description', '')) if job.get('description') else ''
+                                        desc_preview = (job_description[:120] + "...") if len(job_description) > 120 else job_description
+                                        if desc_preview:
+                                            st.caption(desc_preview)
+                                        
+                                        # Action buttons - use search keywords URL
+                                        search_keywords_card = st.session_state.get("search_keywords", "")
+                                        if search_keywords_card:
+                                            keywords_encoded = search_keywords_card.replace(" ", "+")
+                                            job_url_card = f"https://www.findsgjobs.com/jobs?keywords={keywords_encoded}"
+                                            st.markdown(
+                                                f'<a href="{job_url_card}" target="_blank" style="text-decoration: none;">'
+                                                f'<button style="background-color: #1f77b4; color: white; border: none; '
+                                                f'padding: 10px 20px; border-radius: 6px; cursor: pointer; width: 100%; '
+                                                f'font-size: 14px;">🔗 View Job</button></a>',
+                                                unsafe_allow_html=True
+                                            )
+                                        elif job.get("url"):
+                                            st.markdown(
+                                                f'<a href="{job["url"]}" target="_blank" style="text-decoration: none;">'
+                                                f'<button style="background-color: #1f77b4; color: white; border: none; '
+                                                f'padding: 10px 20px; border-radius: 6px; cursor: pointer; width: 100%; '
+                                                f'font-size: 14px;">🔗 View Job</button></a>',
+                                                unsafe_allow_html=True
+                                            )
+                                        
+                                        with st.expander("📄 Full Details"):
+                                            st.write("**Description:**")
+                                            st.write(job_description if job_description else "No description available")
+                                            # Use search keywords URL
+                                            search_keywords_details = st.session_state.get("search_keywords", "")
+                                            if search_keywords_details:
+                                                keywords_encoded = search_keywords_details.replace(" ", "+")
+                                                job_url_details = f"https://www.findsgjobs.com/jobs?keywords={keywords_encoded}"
+                                                st.markdown(f'<a href="{job_url_details}" target="_blank">View Full Posting →</a>', unsafe_allow_html=True)
+                                            elif job.get("url"):
+                                                st.markdown(f'<a href="{job["url"]}" target="_blank">View Full Posting →</a>', unsafe_allow_html=True)
+                                    
+                            except Exception as e:
+                                logger.warning(f"Error displaying job {idx}: {str(e)}")
+                                continue
         
         # Step 3: Run AI Matching
         st.subheader("Step 3: Run AI Job Recommendations")
@@ -276,6 +888,14 @@ def main():
         elif not st.session_state["jobs_raw"]:
             st.warning("⚠️ Please fetch jobs first.")
         else:
+            # Check if model name might be invalid
+            model_name_display = model_name_input or GEMINI_MODEL_NAME
+            if "gemini-1.5-pro" in model_name_display.lower():
+                st.warning(
+                    "⚠️ **Model Warning**: `gemini-1.5-pro` may not be available. "
+                    "Try `gemini-1.5-flash` instead. Click '🔄 Reset LLM Client' after changing the model name."
+                )
+            
             if st.button("🚀 Run AI Job Recommendations & Skill Gap Analysis"):
                 with st.spinner("Running AI pipeline... This may take a few minutes."):
                     try:
@@ -288,8 +908,41 @@ def main():
                         st.session_state["ai_results"] = results
                         st.success("✅ AI analysis complete!")
                     except Exception as e:
-                        st.error(f"❌ Error running pipeline: {str(e)}")
-                        logger.error(f"Pipeline error: {str(e)}")
+                        error_msg = str(e)
+                        # Check if it's a 404 model error
+                        if "404" in error_msg and ("model" in error_msg.lower() or "not found" in error_msg.lower()):
+                            st.error("❌ **Model Not Found Error**")
+                            st.error(f"Error: {error_msg}")
+                            st.info(
+                                "💡 **Solution**:\n"
+                                "1. Change the 'Model Name' in the sidebar to `gemini-1.5-flash`\n"
+                                "2. Click '🔄 Reset LLM Client' button\n"
+                                "3. Or click '📋 List Available Models' to see what models your API key supports"
+                            )
+                            # Auto-reset the client to force reinitialization
+                            st.session_state["llm_client"] = None
+                            st.rerun()
+                        # Check if it's a rate limit error
+                        elif "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                            st.error("❌ **Gemini API Rate Limit Exceeded**")
+                            st.error(f"Error: {error_msg}")
+                            st.warning(
+                                "⚠️ **Free Tier Limit**: 10 requests per minute per model\n\n"
+                                "**What happened**:\n"
+                                "- The system automatically retried with delays\n"
+                                "- But still hit the rate limit\n\n"
+                                "**Solutions**:\n"
+                                "1. **Wait 1 minute** and try again (quota resets every minute)\n"
+                                "2. **Reduce the number of jobs** being analyzed\n"
+                                "3. **Upgrade your API plan** for higher limits\n"
+                                "4. Check your usage: https://ai.dev/usage?tab=rate-limit"
+                            )
+                            # Show partial results if available
+                            if st.session_state.get("ai_results"):
+                                st.info("ℹ️ Partial results are available below (some jobs may be missing due to rate limits)")
+                        else:
+                            st.error(f"❌ Error running pipeline: {error_msg}")
+                        logger.error(f"Pipeline error: {error_msg}")
         
         # Display Recommendations
         if st.session_state["ai_results"]:
@@ -311,8 +964,14 @@ def main():
                         if job.get("salary_text"):
                             st.write(f"**Salary:** {job['salary_text']}")
                         st.write(f"**Reasoning:** {job.get('reasoning', 'N/A')}")
-                        if job.get("url"):
-                            st.markdown(f"[View Job →]({job['url']})")
+                        # Use search keywords URL for recommended jobs
+                        search_keywords_rec = st.session_state.get("search_keywords", "")
+                        if search_keywords_rec:
+                            keywords_encoded = search_keywords_rec.replace(" ", "+")
+                            job_url_rec = f"https://www.findsgjobs.com/jobs?keywords={keywords_encoded}"
+                            st.markdown(f'<a href="{job_url_rec}" target="_blank">View Job →</a>', unsafe_allow_html=True)
+                        elif job.get("url"):
+                            st.markdown(f'<a href="{job["url"]}" target="_blank">View Job →</a>', unsafe_allow_html=True)
             else:
                 st.info("No recommendations available.")
     
@@ -335,37 +994,97 @@ def main():
                         
                         with col1:
                             st.write("**✅ Matched Skills:**")
-                            if gap.get("matched_skills"):
-                                st.write(", ".join(gap["matched_skills"]))
+                            matched_skills = gap.get("matched_skills") or []
+                            if matched_skills and isinstance(matched_skills, list):
+                                st.write(", ".join(matched_skills))
                             else:
                                 st.write("None")
                             
                             st.write("**❌ Missing Required Skills:**")
-                            if gap.get("missing_required_skills"):
-                                st.write(", ".join(gap["missing_required_skills"]))
+                            missing_skills = gap.get("missing_required_skills") or []
+                            if missing_skills and isinstance(missing_skills, list):
+                                st.write(", ".join(missing_skills))
                             else:
                                 st.write("None")
                         
                         with col2:
                             st.write("**⭐ Nice-to-Have Skills:**")
-                            if gap.get("nice_to_have_skills"):
-                                st.write(", ".join(gap["nice_to_have_skills"]))
+                            nice_to_have = gap.get("nice_to_have_skills") or []
+                            if nice_to_have and isinstance(nice_to_have, list):
+                                st.write(", ".join(nice_to_have))
                             else:
                                 st.write("None")
                             
                             st.write("**📚 Suggested Learning Path:**")
                             if gap.get("suggested_learning_path"):
-                                for i, step in enumerate(gap["suggested_learning_path"], 1):
-                                    st.write(f"{i}. {step}")
+                                learning_path = gap["suggested_learning_path"]
+                                if isinstance(learning_path, list):
+                                    for i, step in enumerate(learning_path, 1):
+                                        # Remove leading numbers if step already has them (e.g., "1. Step" -> "Step")
+                                        step_clean = str(step).strip()
+                                        # Check if step starts with a number pattern like "1. " or "1)"
+                                        step_clean = re.sub(r'^\d+[\.\)]\s*', '', step_clean)
+                                        st.write(f"{i}. {step_clean}")
+                                else:
+                                    st.write("No suggestions available")
                             else:
                                 st.write("No suggestions available")
+                        
+                        # Learning Resources Section
+                        st.markdown("---")
+                        st.write("**🎓 Learning Resources & Certifications:**")
+                        learning_resources = gap.get("learning_resources", [])
+                        
+                        if learning_resources:
+                            # Group resources by skill
+                            resources_by_skill = {}
+                            for resource in learning_resources:
+                                skill = resource.get("skill", "General")
+                                if skill not in resources_by_skill:
+                                    resources_by_skill[skill] = []
+                                resources_by_skill[skill].append(resource)
+                            
+                            # Display resources grouped by skill
+                            for skill, resources in resources_by_skill.items():
+                                st.markdown(f"**For: {skill}**")
+                                for resource in resources:
+                                    resource_name = resource.get("name", "Unknown")
+                                    resource_url = resource.get("url", "#")
+                                    resource_type = resource.get("type", "online_course")
+                                    
+                                    # Icon based on type
+                                    type_icons = {
+                                        "university": "🏛️",
+                                        "online_course": "💻",
+                                        "certification": "📜",
+                                        "bootcamp": "🚀",
+                                        "training_program": "📚",
+                                        "mooc": "🌐",
+                                    }
+                                    icon = type_icons.get(resource_type, "📖")
+                                    
+                                    # Display as clickable link
+                                    st.markdown(
+                                        f'{icon} <a href="{resource_url}" target="_blank" style="text-decoration: none; color: #1f77b4; font-weight: 500;">{resource_name}</a> '
+                                        f'<span style="color: #6c757d; font-size: 0.9em;">({resource_type.replace("_", " ").title()})</span>',
+                                        unsafe_allow_html=True
+                                    )
+                        else:
+                            st.info("No specific learning resources available. Check the suggested learning path above for general guidance.")
                 
                 # Overall Roadmap
                 roadmap = results.get("upskilling_roadmap", [])
                 if roadmap:
                     st.subheader("🎯 Overall Upskilling Roadmap")
-                    for i, step in enumerate(roadmap, 1):
-                        st.write(f"{i}. {step}")
+                    if isinstance(roadmap, list):
+                        for i, step in enumerate(roadmap, 1):
+                            # Remove leading numbers if step already has them (e.g., "1. Step" -> "Step")
+                            step_clean = str(step).strip()
+                            # Check if step starts with a number pattern like "1. " or "1)"
+                            step_clean = re.sub(r'^\d+[\.\)]\s*', '', step_clean)
+                            st.write(f"{i}. {step_clean}")
+                    else:
+                        st.write("No roadmap available")
                 
                 # Warnings
                 warnings = results.get("warnings", [])
@@ -386,8 +1105,95 @@ def main():
         st.subheader(f"Raw Jobs ({len(st.session_state['jobs_raw'])} jobs)")
         if st.session_state["jobs_raw"]:
             st.json(st.session_state["jobs_raw"][:5])  # Show first 5
+            
+            # Show structure analysis
+            if st.session_state["jobs_raw"]:
+                st.markdown("---")
+                st.subheader("Job Structure Analysis")
+                sample_job = st.session_state["jobs_raw"][0]
+                
+                st.write("**Sample job keys:**")
+                if isinstance(sample_job, dict):
+                    st.code(list(sample_job.keys()))
+                    
+                    # Show normalized version for comparison
+                    st.write("**Normalized job (what the app sees):**")
+                    try:
+                        normalized = normalize_job(sample_job)
+                        st.json({
+                            "id": normalized.get("id"),
+                            "title": normalized.get("title"),
+                            "company": normalized.get("company"),
+                            "location": normalized.get("location"),
+                            "salary_text": normalized.get("salary_text"),
+                            "category": normalized.get("category"),
+                            "description_preview": normalized.get("description", "")[:100] + "..." if len(normalized.get("description", "")) > 100 else normalized.get("description", ""),
+                        })
+                    except Exception as e:
+                        st.error(f"Error normalizing: {str(e)}")
+                    
+                    # Show field mapping
+                    st.write("**Field Value Preview:**")
+                    preview_data = []
+                    for key, value in list(sample_job.items())[:10]:  # Show first 10 fields
+                        value_preview = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                        preview_data.append({
+                            "Field Name": key,
+                            "Type": type(value).__name__,
+                            "Value Preview": value_preview
+                        })
+                    import pandas as pd
+                    st.dataframe(pd.DataFrame(preview_data), width='stretch', hide_index=True)
+                else:
+                    st.write("Not a dictionary")
+                
+                st.write("**Full raw job (first job):**")
+                st.json(sample_job)
         else:
             st.info("No jobs fetched yet.")
+            
+            # Add test API call button
+            st.markdown("---")
+            st.subheader("Test API Call")
+            test_keywords = st.text_input("Test Keywords", value=DEFAULT_KEYWORDS, key="test_keywords")
+            if st.button("🔬 Test API Call (Single Request)"):
+                try:
+                    import requests
+                    from config import FIND_SGJOBS_BASE_URL
+                    
+                    test_params = {"page": 1, "keywords": test_keywords or DEFAULT_KEYWORDS}
+                    with st.spinner("Making test API call..."):
+                        response = requests.get(FIND_SGJOBS_BASE_URL, params=test_params, timeout=10)
+                        st.write(f"**Status Code:** {response.status_code}")
+                        st.write(f"**Content-Type:** {response.headers.get('Content-Type', 'N/A')}")
+                        
+                        try:
+                            json_data = response.json()
+                            st.write("**Response Structure:**")
+                            st.json(json_data)
+                            
+                            # Analyze structure
+                            if isinstance(json_data, dict):
+                                st.write("**Top-level keys:**")
+                                st.code(list(json_data.keys()))
+                                # Check for common job list keys
+                                for key in ["data", "jobs", "results", "items", "jobList", "JobList"]:
+                                    if key in json_data:
+                                        value = json_data[key]
+                                        st.write(f"**Found key '{key}':** Type = {type(value).__name__}, Length = {len(value) if isinstance(value, (list, dict)) else 'N/A'}")
+                                        if isinstance(value, list) and len(value) > 0:
+                                            st.write(f"**First item in '{key}':**")
+                                            st.json(value[0])
+                            elif isinstance(json_data, list):
+                                st.write(f"**Response is a list with {len(json_data)} items**")
+                                if len(json_data) > 0:
+                                    st.write("**First item:**")
+                                    st.json(json_data[0])
+                        except ValueError:
+                            st.error("Response is not valid JSON")
+                            st.text(response.text[:2000])
+                except Exception as e:
+                    st.error(f"Test API call failed: {str(e)}")
         
         st.subheader("AI Results (JSON)")
         if st.session_state["ai_results"]:

@@ -67,12 +67,26 @@ def run_job_matching_pipeline(
     # Step 2: Extract skills from jobs
     logger.info("Step 2: Extracting skills from jobs...")
     job_skills = {}
-    for job in normalized_jobs:
+    import time
+    for idx, job in enumerate(normalized_jobs):
         try:
+            # Add small delay between requests to help stay within rate limits
+            if idx > 0:
+                time.sleep(0.5)  # 500ms delay between requests
             skills = extract_skills_from_job(job, llm)
             job_skills[job["id"]] = skills
         except Exception as e:
-            logger.warning(f"Failed to extract skills for job {job.get('id')}: {str(e)}")
+            error_msg = str(e)
+            # Check if it's a rate limit error
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.error(
+                    f"Rate limit exceeded while extracting skills for job {job.get('id')}. "
+                    f"Please wait a minute before retrying. Error: {error_msg}"
+                )
+                # Stop processing more jobs to avoid hitting limit further
+                break
+            else:
+                logger.warning(f"Failed to extract skills for job {job.get('id')}: {error_msg}")
             continue
     
     logger.info(f"Extracted skills from {len(job_skills)} jobs")
@@ -99,14 +113,28 @@ def run_job_matching_pipeline(
     # Step 4: Generate skill gaps for top matches
     logger.info("Step 4: Generating skill gap analysis...")
     gaps = []
-    for match in matches:
+    import time
+    for idx, match in enumerate(matches):
         try:
+            # Add small delay between requests to help stay within rate limits
+            if idx > 0:
+                time.sleep(0.5)  # 500ms delay between requests
             job = match["job"]
             skills = job_skills.get(job["id"], {})
             gap = generate_skill_gap_for_match(profile, job, skills, llm)
             gaps.append(gap)
         except Exception as e:
-            logger.warning(f"Failed to generate gap for job {match['job'].get('id')}: {str(e)}")
+            error_msg = str(e)
+            # Check if it's a rate limit error
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.error(
+                    f"Rate limit exceeded while generating skill gap for job {match['job'].get('id')}. "
+                    f"Please wait a minute before retrying. Error: {error_msg}"
+                )
+                # Stop processing more jobs to avoid hitting limit further
+                break
+            else:
+                logger.warning(f"Failed to generate gap for job {match['job'].get('id')}: {error_msg}")
             continue
     
     logger.info(f"Generated {len(gaps)} skill gap analyses")

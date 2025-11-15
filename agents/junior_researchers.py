@@ -38,6 +38,11 @@ Extract the following information:
   - field: Field of study
   - year: Graduation year (if available)
 - target_roles: List of target job roles or career interests (if mentioned)
+- experience_level: Overall experience level based on years and roles (one of: "Entry Level", "Junior", "Mid-Level", "Senior", "Lead", "Executive", or null if unclear)
+- location: Preferred work location if mentioned (e.g., "Singapore", "Remote", etc.), or null
+- salary_range_min: Minimum expected salary if mentioned (numeric), or null
+- salary_range_max: Maximum expected salary if mentioned (numeric), or null
+- salary_currency: Currency for salary if mentioned (e.g., "SGD", "USD"), default to "SGD" if not specified
 
 Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
 
@@ -57,6 +62,11 @@ Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
             "experience": response.get("experience", []),
             "education": response.get("education", []),
             "target_roles": response.get("target_roles", []),
+            "experience_level": response.get("experience_level"),
+            "location": response.get("location"),
+            "salary_range_min": response.get("salary_range_min"),
+            "salary_range_max": response.get("salary_range_max"),
+            "salary_currency": response.get("salary_currency", "SGD"),
         }
         
         return profile
@@ -71,6 +81,11 @@ Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
             "experience": [],
             "education": [],
             "target_roles": [],
+            "experience_level": None,
+            "location": None,
+            "salary_range_min": None,
+            "salary_range_max": None,
+            "salary_currency": "SGD",
         }
 
 

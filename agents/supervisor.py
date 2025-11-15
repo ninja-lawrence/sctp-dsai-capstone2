@@ -84,7 +84,6 @@ Jobs to Rank:
 Rank these jobs and return match scores."""
 
     try:
-        import json
         response = llm.chat_json(system_prompt, user_prompt)
         
         # Ensure response is a list

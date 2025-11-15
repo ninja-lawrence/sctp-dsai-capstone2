@@ -32,7 +32,9 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
    - Add your Google Gemini API key:
      ```
      GEMINI_API_KEY=your_api_key_here
+     GEMINI_MODEL_NAME=gemini-1.5-pro
      ```
+   - Note: Default model is `gemini-1.5-pro`. If you get a 404 error, try `gemini-1.5-flash` or use the "List Available Models" button in the app to see all available models.
 
 3. **Run the application**:
    ```bash
@@ -88,6 +90,9 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 - All intelligence comes from prompt engineering and multi-agent workflows
 - Resume parsing supports PDF, DOCX, and TXT formats
 - Job data is fetched from FindSGJobs public API
+- **Rate Limiting**: FindSGJobs API is limited to **60 requests per minute per IP**. 
+  The application automatically throttles requests to stay within this limit. 
+  See [FindSGJobs API documentation](https://www.findsgjobs.com/apis/job/searchable) for details.
 
 ## License
 

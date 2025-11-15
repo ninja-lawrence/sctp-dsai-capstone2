@@ -11,6 +11,11 @@ class UserProfile(TypedDict, total=False):
     experience: List[Dict[str, Any]]  # [{company, title, years, responsibilities}]
     education: List[Dict[str, Any]]  # [{institution, degree, field, year}]
     target_roles: List[str]
+    experience_level: Optional[str]  # e.g., "entry", "junior", "mid-level", "senior", "lead", "executive"
+    location: Optional[str]  # Preferred work location
+    salary_range_min: Optional[int]  # Minimum expected salary
+    salary_range_max: Optional[int]  # Maximum expected salary
+    salary_currency: Optional[str]  # e.g., "SGD", "USD"
 
 
 class JobPosting(TypedDict):
@@ -23,6 +28,7 @@ class JobPosting(TypedDict):
     category: Optional[str]
     description: str
     url: Optional[str]
+    image_url: Optional[str]  # Company logo or job image URL
 
 
 class ExtractedSkills(TypedDict, total=False):
@@ -40,7 +46,15 @@ class JobMatch(TypedDict):
     reasoning: str
 
 
-class SkillGapResult(TypedDict):
+class LearningResource(TypedDict):
+    """Learning resource (school/institution/certification)."""
+    name: str  # Name of the institution/course/certification
+    url: str  # Link to the learning resource
+    type: str  # e.g., "university", "online_course", "certification", "bootcamp", "training_program"
+    skill: str  # Which skill this resource helps learn
+
+
+class SkillGapResult(TypedDict, total=False):
     """Skill gap analysis for a specific job."""
     job_id: str
     job_title: str
@@ -48,6 +62,7 @@ class SkillGapResult(TypedDict):
     missing_required_skills: List[str]
     nice_to_have_skills: List[str]
     suggested_learning_path: List[str]  # High-level upskilling suggestions
+    learning_resources: List[LearningResource]  # Links to schools/institutions/certifications
 
 
 class ReviewResult(TypedDict, total=False):
