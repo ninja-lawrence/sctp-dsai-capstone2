@@ -9,7 +9,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 # Default to gemini-1.5-flash (faster and more widely available)
 # Alternatives: gemini-1.5-pro, gemini-pro
 # If this doesn't work, use list_available_models() in llm_client.py to see available models
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 
 # Gemini API Rate Limiting
 # Free tier: 10 requests per minute per model
