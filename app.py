@@ -9,10 +9,10 @@ from config import (
     EMPLOYMENT_TYPES,
     CURRENCIES,
     SALARY_INTERVALS,
-    GEMINI_API_KEY,
-    GEMINI_MODEL_NAME,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL_NAME,
 )
-from services.llm_client import GeminiClient, list_available_models, get_gemini_rate_limit_status
+from services.llm_client import OllamaClient, list_available_models, get_ollama_rate_limit_status
 from services.findsgjobs_client import fetch_all_findsgjobs, normalize_job, get_rate_limit_status
 from services.resume_parser import parse_resume
 from agents.junior_researchers import extract_profile_from_resume_text
@@ -68,38 +68,37 @@ if "search_keywords" not in st.session_state:
     st.session_state["search_keywords"] = ""
 
 
-def initialize_llm_client() -> Tuple[Optional[GeminiClient], str, str]:
+def initialize_llm_client() -> Tuple[Optional[OllamaClient], str, str]:
     """
     Initialize and cache LLM client.
     
     Returns:
-        Tuple of (client, api_key, model_name) for use in UI
+        Tuple of (client, base_url, model_name) for use in UI
     """
-    # Get API key and model name from sidebar inputs
-    api_key = st.sidebar.text_input(
-        "Gemini API Key",
-        value=GEMINI_API_KEY,
-        type="password",
-        help="Enter your Google Gemini API key",
-        key="gemini_api_key_input",
+    # Get base URL and model name from sidebar inputs
+    base_url = st.sidebar.text_input(
+        "Ollama Base URL",
+        value=OLLAMA_BASE_URL,
+        help="Ollama server URL (default: http://localhost:11434)",
+        key="ollama_base_url_input",
     )
     
     model_name = st.sidebar.text_input(
         "Model Name",
-        value=GEMINI_MODEL_NAME,
-        help="Gemini model to use (e.g., gemini-1.5-pro, gemini-1.5-flash)",
-        key="gemini_model_name_input",
+        value=OLLAMA_MODEL_NAME,
+        help="Ollama model to use (e.g., deepseek-r1, llama3, mistral). Check available models with 'ollama list'",
+        key="ollama_model_name_input",
     )
     
-    # Check if we need to reinitialize the client (API key or model changed)
+    # Check if we need to reinitialize the client (base_url or model changed)
     need_reinit = False
     if st.session_state["llm_client"] is None:
         need_reinit = True
     else:
-        # Check if API key or model name changed
+        # Check if base_url or model name changed
         cached_client = st.session_state["llm_client"]
-        if hasattr(cached_client, 'api_key'):
-            if cached_client.api_key != api_key:
+        if hasattr(cached_client, 'base_url'):
+            if cached_client.base_url != base_url:
                 need_reinit = True
         else:
             need_reinit = True
@@ -111,24 +110,24 @@ def initialize_llm_client() -> Tuple[Optional[GeminiClient], str, str]:
             need_reinit = True
     
     if need_reinit:
-        if not api_key:
-            st.sidebar.warning("⚠️ Please enter your Gemini API key in the sidebar")
-            return None, api_key, model_name
+        if not base_url:
+            st.sidebar.warning("⚠️ Please enter Ollama base URL in the sidebar")
+            return None, base_url, model_name
         
         try:
-            client = GeminiClient(api_key=api_key, model_name=model_name)
+            client = OllamaClient(base_url=base_url, model_name=model_name)
             st.session_state["llm_client"] = client
             st.sidebar.success("✅ LLM client initialized")
-            return client, api_key, model_name
+            return client, base_url, model_name
         except Exception as e:
             error_msg = str(e)
             st.sidebar.error(f"❌ Failed to initialize LLM: {error_msg}")
             # Show helpful suggestions if model not found
-            if "404" in error_msg or "not found" in error_msg.lower():
-                st.sidebar.warning("⚠️ Model not found. Trying to list available models...")
+            if "not found" in error_msg.lower() or "not reachable" in error_msg.lower():
+                st.sidebar.warning("⚠️ Model not found or server not reachable. Trying to list available models...")
                 try:
                     with st.spinner("Fetching available models..."):
-                        available_models = list_available_models(api_key)
+                        available_models = list_available_models(base_url)
                         if available_models:
                             st.sidebar.success(f"✅ Found {len(available_models)} available models:")
                             # Show first few models
@@ -140,21 +139,22 @@ def initialize_llm_client() -> Tuple[Optional[GeminiClient], str, str]:
                             suggested_model = available_models[0]
                             st.sidebar.info(
                                 f"💡 **Try this model**: `{suggested_model}`\n"
-                                f"Update the 'Model Name' field above and click '🔄 Reset LLM Client'"
+                                f"Update the 'Model Name' field above and click '🔄 Reset LLM Client'\n"
+                                f"Or pull it with: `ollama pull {suggested_model}`"
                             )
                         else:
-                            st.sidebar.warning("No models found. Check your API key.")
+                            st.sidebar.warning("No models found. Make sure Ollama is running.")
                 except Exception as list_error:
                     st.sidebar.error(f"Could not list models: {str(list_error)}")
                     st.sidebar.info(
                         "💡 **Manual fix**:\n"
-                        "- Try 'gemini-pro' (older model)\n"
-                        "- Or check Google's documentation for available models\n"
-                        "- Make sure your API key has access to Gemini models"
+                        "- Make sure Ollama is running: `ollama serve`\n"
+                        "- Pull a model: `ollama pull deepseek-r1`\n"
+                        "- Check that the base URL is correct (default: http://localhost:11434)"
                     )
-            return None, api_key, model_name
+            return None, base_url, model_name
     
-    return st.session_state["llm_client"], api_key, model_name
+    return st.session_state["llm_client"], base_url, model_name
 
 
 def main():
@@ -168,26 +168,27 @@ def main():
         
         # LLM Config
         st.subheader("LLM Settings")
-        llm_client, api_key_input, model_name_input = initialize_llm_client()
+        llm_client, base_url_input, model_name_input = initialize_llm_client()
         
         if llm_client:
             st.text(f"Model: {llm_client.model_name}")
+            st.text(f"Server: {llm_client.base_url}")
         
         # Show available models button
         if st.button("📋 List Available Models"):
             try:
-                api_key = api_key_input or GEMINI_API_KEY
-                if api_key:
+                base_url = base_url_input or OLLAMA_BASE_URL
+                if base_url:
                     with st.spinner("Fetching available models..."):
-                        models = list_available_models(api_key)
+                        models = list_available_models(base_url)
                         st.success(f"Found {len(models)} available models:")
                         st.code("\n".join(models))
                         st.info("💡 Copy one of these model names to the 'Model Name' field above")
                 else:
-                    st.warning("Please enter API key in the 'Gemini API Key' field above first")
+                    st.warning("Please enter Ollama base URL in the 'Ollama Base URL' field above first")
             except Exception as e:
                 st.error(f"Error listing models: {str(e)}")
-                st.info("💡 Make sure you've entered a valid API key above")
+                st.info("💡 Make sure Ollama is running and the base URL is correct")
         
         # Reset LLM client button
         if st.session_state["llm_client"] is not None:
@@ -246,23 +247,23 @@ def main():
         
         st.caption(f"Rate limit: {total} requests per {rate_status['window_seconds']} seconds (per IP)")
         
-        # Gemini API Rate Limit
+        # Ollama API Rate Limit
         if llm_client and hasattr(llm_client, 'model_name'):
-            st.markdown("**Gemini API:**")
-            gemini_status = get_gemini_rate_limit_status(llm_client.model_name)
-            gemini_remaining = gemini_status["remaining_requests"]
-            gemini_total = gemini_status["rate_limit"]
+            st.markdown("**Ollama API:**")
+            ollama_status = get_ollama_rate_limit_status(llm_client.model_name)
+            ollama_remaining = ollama_status["remaining_requests"]
+            ollama_total = ollama_status["rate_limit"]
             
-            if gemini_remaining > gemini_total * 0.5:
-                st.success(f"✅ {gemini_remaining}/{gemini_total} requests remaining ({llm_client.model_name})")
-            elif gemini_remaining > gemini_total * 0.2:
-                st.warning(f"⚠️ {gemini_remaining}/{gemini_total} requests remaining ({llm_client.model_name})")
+            if ollama_remaining > ollama_total * 0.5:
+                st.success(f"✅ {ollama_remaining}/{ollama_total} requests remaining ({llm_client.model_name})")
+            elif ollama_remaining > ollama_total * 0.2:
+                st.warning(f"⚠️ {ollama_remaining}/{ollama_total} requests remaining ({llm_client.model_name})")
             else:
-                st.error(f"🔴 {gemini_remaining}/{gemini_total} requests remaining ({llm_client.model_name})")
+                st.error(f"🔴 {ollama_remaining}/{ollama_total} requests remaining ({llm_client.model_name})")
             
-            st.caption(f"Free tier limit: {gemini_total} requests per minute per model")
-            if gemini_remaining < 3:
-                st.warning("⚠️ Low Gemini API quota remaining. The system will automatically retry with delays if rate limited.")
+            st.caption(f"Rate limit: {ollama_total} requests per minute per model")
+            if ollama_remaining < 3:
+                st.warning("⚠️ Low Ollama rate limit remaining. The system will automatically retry with delays if rate limited.")
         
         st.info("💡 Tip: APIs automatically throttle requests to stay within limits.")
     
@@ -291,22 +292,126 @@ def main():
         )
         
         if uploaded_file is not None:
+            # Show file info
+            st.info(f"📄 File: {uploaded_file.name} ({uploaded_file.size:,} bytes)")
+            
             if st.button("Parse Resume"):
                 with st.spinner("Parsing resume..."):
                     try:
+                        # Step 1: Parse file to text
                         file_content = uploaded_file.read()
                         resume_text = parse_resume(file_content, uploaded_file.name)
                         
-                        if llm_client:
-                            profile = extract_profile_from_resume_text(resume_text, llm_client)
-                            st.session_state["user_profile"] = profile
-                            st.success("✅ Resume parsed successfully!")
-                            st.json(profile)
+                        # Validate parsed text
+                        if not resume_text or not resume_text.strip():
+                            st.error("❌ Failed to extract text from resume. The file might be corrupted or in an unsupported format.")
+                            st.info("💡 Try uploading a different file format (PDF, DOCX, or TXT)")
+                            logger.error(f"Resume parsing returned empty text for file: {uploaded_file.name}")
                         else:
-                            st.error("❌ LLM client not initialized. Please configure API key in sidebar.")
+                            # Show preview of parsed text
+                            with st.expander("📋 Preview Parsed Resume Text", expanded=False):
+                                st.text_area(
+                                    "Extracted text (first 1000 characters):",
+                                    value=resume_text[:1000] + ("..." if len(resume_text) > 1000 else ""),
+                                    height=200,
+                                    disabled=True,
+                                    key="resume_preview"
+                                )
+                                st.caption(f"Total length: {len(resume_text)} characters")
+                            
+                            # Step 2: Extract profile using LLM
+                            if llm_client:
+                                try:
+                                    profile = extract_profile_from_resume_text(resume_text, llm_client)
+                                    st.session_state["user_profile"] = profile
+                                    st.success("✅ Resume parsed successfully!")
+                                    
+                                    # Check if profile has meaningful data
+                                    has_data = (
+                                        profile.get("name") or 
+                                        profile.get("headline") or 
+                                        profile.get("summary") or 
+                                        profile.get("skills") or 
+                                        profile.get("experience") or 
+                                        profile.get("education")
+                                    )
+                                    
+                                    if not has_data:
+                                        st.warning("⚠️ Warning: The extracted profile appears to be empty. This might indicate:")
+                                        st.markdown("""
+                                        - The resume format is not recognized by the LLM
+                                        - The resume text is too short or unclear
+                                        - The LLM model might need adjustment
+                                        - Try manually editing the profile below
+                                        """)
+                                    
+                                    st.json(profile)
+                                except ValueError as e:
+                                    # Validation errors (empty text, etc.)
+                                    st.error(f"❌ Validation Error: {str(e)}")
+                                    logger.error(f"Resume validation error: {str(e)}")
+                                    st.info("💡 Please check that your resume file contains readable text.")
+                                except RuntimeError as e:
+                                    # LLM errors
+                                    error_msg = str(e)
+                                    st.error(f"❌ LLM Error: {error_msg}")
+                                    logger.error(f"LLM error during resume parsing: {error_msg}")
+                                    
+                                    # Provide helpful suggestions
+                                    if "405" in error_msg or "method not allowed" in error_msg.lower():
+                                        st.info("💡 **Ollama API method not allowed (405).** This usually means:")
+                                        st.markdown("""
+                                        - There might be an Ollama version mismatch. Try updating Ollama: `ollama --version`
+                                        - The API endpoint might have changed. Check Ollama documentation.
+                                        - Verify you're using the correct Ollama version (latest recommended).
+                                        - Try restarting Ollama: Stop and run `ollama serve` again.
+                                        """)
+                                    elif "404" in error_msg or "not found" in error_msg.lower() or "endpoint not found" in error_msg.lower():
+                                        st.info("💡 **Ollama API endpoint not found (404).** This usually means:")
+                                        st.markdown("""
+                                        - Ollama is not running. Start it with: `ollama serve`
+                                        - The Ollama service might have stopped. Check if it's running.
+                                        - Verify the base URL in the sidebar is correct (default: http://localhost:11434)
+                                        """)
+                                    elif "not reachable" in error_msg.lower() or "connection" in error_msg.lower():
+                                        st.info("💡 **Ollama server is not reachable.** Make sure Ollama is running: `ollama serve`")
+                                    elif "timeout" in error_msg.lower():
+                                        st.info("💡 **Request timed out.** The LLM might be slow. Try again or check your Ollama server.")
+                                    elif "JSON" in error_msg or "parse" in error_msg.lower():
+                                        st.info("💡 **LLM returned invalid response.** Try:")
+                                        st.markdown("""
+                                        - Using a different model (check sidebar)
+                                        - Simplifying the resume format
+                                        - Checking the Debug tab for more details
+                                        """)
+                                    else:
+                                        st.info("💡 Check the Debug tab for more details, or try manually editing your profile below.")
+                                except Exception as e:
+                                    # Other unexpected errors
+                                    st.error(f"❌ Unexpected Error: {str(e)}")
+                                    logger.error(f"Unexpected error during resume parsing: {str(e)}", exc_info=True)
+                                    st.info("💡 Check the Debug tab or logs for more details.")
+                            else:
+                                st.error("❌ LLM client not initialized. Please configure Ollama in the sidebar.")
+                                st.info("💡 Make sure:")
+                                st.markdown("""
+                                - Ollama is running (`ollama serve`)
+                                - The base URL is correct (default: http://localhost:11434)
+                                - A model is available (e.g., `ollama pull deepseek-r1`)
+                                """)
+                    except ValueError as e:
+                        # File parsing errors
+                        error_msg = str(e)
+                        st.error(f"❌ File Parsing Error: {error_msg}")
+                        logger.error(f"File parsing error: {error_msg}")
+                        if "Unsupported file type" in error_msg:
+                            st.info("💡 Supported formats: PDF, DOCX, TXT")
+                        elif "pypdf" in error_msg.lower() or "python-docx" in error_msg.lower():
+                            st.info("💡 Missing required library. Install with: `pip install pypdf python-docx`")
                     except Exception as e:
-                        st.error(f"❌ Error parsing resume: {str(e)}")
-                        logger.error(f"Resume parsing error: {str(e)}")
+                        st.error(f"❌ Unexpected Error: {str(e)}")
+                        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+                        st.info("💡 Check the Debug tab or logs for more details.")
         
         st.markdown("---")
         
@@ -882,19 +987,14 @@ def main():
         st.subheader("Step 3: Run AI Job Recommendations")
         
         if not llm_client:
-            st.warning("⚠️ Please configure Gemini API key in the sidebar first.")
+            st.warning("⚠️ Please configure Ollama in the sidebar first (make sure Ollama is running).")
         elif not st.session_state["user_profile"].get("skills"):
             st.warning("⚠️ Please set up your profile with skills first.")
         elif not st.session_state["jobs_raw"]:
             st.warning("⚠️ Please fetch jobs first.")
         else:
             # Check if model name might be invalid
-            model_name_display = model_name_input or GEMINI_MODEL_NAME
-            if "gemini-1.5-pro" in model_name_display.lower():
-                st.warning(
-                    "⚠️ **Model Warning**: `gemini-1.5-pro` may not be available. "
-                    "Try `gemini-1.5-flash` instead. Click '🔄 Reset LLM Client' after changing the model name."
-                )
+            model_name_display = model_name_input or OLLAMA_MODEL_NAME
             
             if st.button("🚀 Run AI Job Recommendations & Skill Gap Analysis"):
                 with st.spinner("Running AI pipeline... This may take a few minutes."):
@@ -909,25 +1009,26 @@ def main():
                         st.success("✅ AI analysis complete!")
                     except Exception as e:
                         error_msg = str(e)
-                        # Check if it's a 404 model error
-                        if "404" in error_msg and ("model" in error_msg.lower() or "not found" in error_msg.lower()):
-                            st.error("❌ **Model Not Found Error**")
+                        # Check if it's a model not found error
+                        if "not found" in error_msg.lower() or "not reachable" in error_msg.lower():
+                            st.error("❌ **Model Not Found or Server Not Reachable**")
                             st.error(f"Error: {error_msg}")
                             st.info(
                                 "💡 **Solution**:\n"
-                                "1. Change the 'Model Name' in the sidebar to `gemini-1.5-flash`\n"
-                                "2. Click '🔄 Reset LLM Client' button\n"
-                                "3. Or click '📋 List Available Models' to see what models your API key supports"
+                                "1. Make sure Ollama is running: `ollama serve`\n"
+                                "2. Pull the model: `ollama pull deepseek-r1`\n"
+                                "3. Click '📋 List Available Models' to see available models\n"
+                                "4. Update the 'Model Name' in the sidebar and click '🔄 Reset LLM Client'"
                             )
                             # Auto-reset the client to force reinitialization
                             st.session_state["llm_client"] = None
                             st.rerun()
                         # Check if it's a rate limit error
-                        elif "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
-                            st.error("❌ **Gemini API Rate Limit Exceeded**")
+                        elif "rate limit" in error_msg.lower():
+                            st.error("❌ **Ollama Rate Limit Exceeded**")
                             st.error(f"Error: {error_msg}")
                             st.warning(
-                                "⚠️ **Free Tier Limit**: 10 requests per minute per model\n\n"
+                                "⚠️ **Rate Limit**: Requests per minute exceeded\n\n"
                                 "**What happened**:\n"
                                 "- The system automatically retried with delays\n"
                                 "- But still hit the rate limit\n\n"
@@ -996,14 +1097,26 @@ def main():
                             st.write("**✅ Matched Skills:**")
                             matched_skills = gap.get("matched_skills") or []
                             if matched_skills and isinstance(matched_skills, list):
-                                st.write(", ".join(matched_skills))
+                                # Handle both strings and dicts (defensive coding)
+                                matched_skills_str = [
+                                    item if isinstance(item, str) 
+                                    else (item.get("skill") or item.get("name") or str(item))
+                                    for item in matched_skills
+                                ]
+                                st.write(", ".join(matched_skills_str))
                             else:
                                 st.write("None")
                             
                             st.write("**❌ Missing Required Skills:**")
                             missing_skills = gap.get("missing_required_skills") or []
                             if missing_skills and isinstance(missing_skills, list):
-                                st.write(", ".join(missing_skills))
+                                # Handle both strings and dicts (defensive coding)
+                                missing_skills_str = [
+                                    item if isinstance(item, str) 
+                                    else (item.get("skill") or item.get("name") or str(item))
+                                    for item in missing_skills
+                                ]
+                                st.write(", ".join(missing_skills_str))
                             else:
                                 st.write("None")
                         
@@ -1011,7 +1124,13 @@ def main():
                             st.write("**⭐ Nice-to-Have Skills:**")
                             nice_to_have = gap.get("nice_to_have_skills") or []
                             if nice_to_have and isinstance(nice_to_have, list):
-                                st.write(", ".join(nice_to_have))
+                                # Handle both strings and dicts (defensive coding)
+                                nice_to_have_str = [
+                                    item if isinstance(item, str) 
+                                    else (item.get("skill") or item.get("name") or str(item))
+                                    for item in nice_to_have
+                                ]
+                                st.write(", ".join(nice_to_have_str))
                             else:
                                 st.write("None")
                             
@@ -1020,10 +1139,14 @@ def main():
                                 learning_path = gap["suggested_learning_path"]
                                 if isinstance(learning_path, list):
                                     for i, step in enumerate(learning_path, 1):
-                                        # Remove leading numbers if step already has them (e.g., "1. Step" -> "Step")
+                                        # Remove leading numbers and step prefixes if step already has them
                                         step_clean = str(step).strip()
-                                        # Check if step starts with a number pattern like "1. " or "1)"
+                                        # Remove "Step X:" or "Step X" patterns
+                                        step_clean = re.sub(r'^Step\s+\d+\s*:\s*', '', step_clean, flags=re.IGNORECASE)
+                                        step_clean = re.sub(r'^Step\s+\d+\s+', '', step_clean, flags=re.IGNORECASE)
+                                        # Remove number patterns like "1. " or "1)"
                                         step_clean = re.sub(r'^\d+[\.\)]\s*', '', step_clean)
+                                        step_clean = step_clean.strip()
                                         st.write(f"{i}. {step_clean}")
                                 else:
                                     st.write("No suggestions available")
@@ -1078,10 +1201,14 @@ def main():
                     st.subheader("🎯 Overall Upskilling Roadmap")
                     if isinstance(roadmap, list):
                         for i, step in enumerate(roadmap, 1):
-                            # Remove leading numbers if step already has them (e.g., "1. Step" -> "Step")
+                            # Remove leading numbers and step prefixes if step already has them
                             step_clean = str(step).strip()
-                            # Check if step starts with a number pattern like "1. " or "1)"
+                            # Remove "Step X:" or "Step X" patterns
+                            step_clean = re.sub(r'^Step\s+\d+\s*:\s*', '', step_clean, flags=re.IGNORECASE)
+                            step_clean = re.sub(r'^Step\s+\d+\s+', '', step_clean, flags=re.IGNORECASE)
+                            # Remove number patterns like "1. " or "1)"
                             step_clean = re.sub(r'^\d+[\.\)]\s*', '', step_clean)
+                            step_clean = step_clean.strip()
                             st.write(f"{i}. {step_clean}")
                     else:
                         st.write("No roadmap available")

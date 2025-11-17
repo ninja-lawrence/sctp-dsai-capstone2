@@ -34,14 +34,37 @@ def rank_jobs_for_user(
     
     profile_summary = summarize_user_profile_for_matching(profile)
     
+    # Helper function to normalize skill lists (handle dicts)
+    def normalize_skill_list(skill_list):
+        """Convert skill list to list of strings, handling dicts if present."""
+        if not isinstance(skill_list, list):
+            return []
+        normalized = []
+        for skill in skill_list:
+            if isinstance(skill, str):
+                normalized.append(skill)
+            elif isinstance(skill, dict):
+                # Extract skill name from dict (try common keys)
+                skill_name = skill.get("skill") or skill.get("name") or skill.get("title") or str(skill)
+                normalized.append(skill_name)
+            else:
+                normalized.append(str(skill))
+        return normalized
+    
     # Build job summaries for LLM
     job_summaries = []
     for job in jobs[:50]:  # Limit to 50 jobs to avoid token limits
         skills = job_skills.get(job["id"], {})
+        
+        # Normalize skill lists to ensure they're strings
+        hard_skills = normalize_skill_list(skills.get('hard_skills', []))
+        soft_skills = normalize_skill_list(skills.get('soft_skills', []))
+        tools = normalize_skill_list(skills.get('tools', []))
+        
         skills_text = f"""
-Hard Skills: {', '.join(skills.get('hard_skills', [])[:10])}
-Soft Skills: {', '.join(skills.get('soft_skills', [])[:10])}
-Tools: {', '.join(skills.get('tools', [])[:10])}
+Hard Skills: {', '.join(hard_skills[:10])}
+Soft Skills: {', '.join(soft_skills[:10])}
+Tools: {', '.join(tools[:10])}
 Seniority: {skills.get('seniority', 'Not specified')}
 """
         
@@ -68,12 +91,31 @@ Consider:
 - Industry/role alignment
 - Education requirements
 
+CRITICAL: You MUST return a valid JSON array. Start with [ and end with ]. Each element must be a JSON object.
+
 Return a JSON array of objects, each with:
-- job_id: The job ID
+- job_id: The job ID (string)
+- title: The job title (string) 
 - match_score: Float between 0.0 and 1.0
 - reasoning: Brief explanation (1-2 sentences) of why this score
 
-Return ONLY valid JSON array. Do not include markdown code blocks."""
+Example format:
+[
+  {
+    "job_id": "123",
+    "title": "Software Developer",
+    "match_score": 0.85,
+    "reasoning": "Strong match because..."
+  },
+  {
+    "job_id": "456",
+    "title": "Data Analyst",
+    "match_score": 0.65,
+    "reasoning": "Moderate match because..."
+  }
+]
+
+Return ONLY the JSON array. Do NOT include markdown code blocks, explanations, or any other text."""
 
     user_prompt = f"""User Profile:
 {profile_summary}
@@ -84,7 +126,8 @@ Jobs to Rank:
 Rank these jobs and return match scores."""
 
     try:
-        response = llm.chat_json(system_prompt, user_prompt)
+        # Use chat_json_array since we expect an array response
+        response = llm.chat_json_array(system_prompt, user_prompt)
         
         # Ensure response is a list
         if not isinstance(response, list):

@@ -4,20 +4,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# LLM Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# Default to gemini-1.5-flash (faster and more widely available)
-# Alternatives: gemini-1.5-pro, gemini-pro
-# If this doesn't work, use list_available_models() in llm_client.py to see available models
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+# LLM Configuration - Ollama
+# Default Ollama base URL (local server)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+# Default model: deepseek-r1 (DeepSeek R1 model)
+# Alternatives: llama3, mistral, deepseek-coder, etc.
+# To see available models: ollama list
+# To see available models, use list_available_models() in llm_client.py
+# To pull a model, run: ollama pull <model_name>
+OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "deepseek-r1")
 
-# Gemini API Rate Limiting
-# Free tier: 10 requests per minute per model
-# Paid tier: Higher limits
-GEMINI_RATE_LIMIT_REQUESTS_PER_MINUTE = 10  # Conservative limit for free tier
-GEMINI_RATE_LIMIT_WINDOW_SECONDS = 60
-GEMINI_RETRY_DELAY_SECONDS = 2  # Initial retry delay
-GEMINI_MAX_RETRIES = 3
+# Ollama Rate Limiting
+# Rate limiting is configurable based on your system capacity
+OLLAMA_RATE_LIMIT_REQUESTS_PER_MINUTE = 60  # Adjust based on your system
+OLLAMA_RATE_LIMIT_WINDOW_SECONDS = 60
+OLLAMA_RETRY_DELAY_SECONDS = 2  # Initial retry delay
+OLLAMA_MAX_RETRIES = 3
+OLLAMA_TIMEOUT_SECONDS = 300  # Timeout for requests (longer for local inference - increased for slow models)
 
 # FindSGJobs API Configuration
 FIND_SGJOBS_BASE_URL = "https://www.findsgjobs.com/apis/job/searchable"

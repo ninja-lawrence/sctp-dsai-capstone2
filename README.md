@@ -1,6 +1,6 @@
 # SCTP Job Recommender & Skill Gap Analyzer
 
-An AI-driven job recommendation and skill gap analysis system built with Streamlit and Google Gemini LLM.
+An AI-driven job recommendation and skill gap analysis system built with Streamlit and Ollama (DeepSeek).
 
 ## Features
 
@@ -27,23 +27,55 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
    pip install -r requirements.txt
    ```
 
-2. **Set up environment variables**:
-   - Copy `.env.example` to `.env`
-   - Add your Google Gemini API key:
+2. **Install and set up Ollama**:
+   - Install Ollama from [https://ollama.ai](https://ollama.ai)
+   - Start the Ollama server (usually runs automatically after installation)
+   - Pull the DeepSeek model:
+     ```bash
+     ollama pull deepseek-r1
      ```
-     GEMINI_API_KEY=your_api_key_here
-     GEMINI_MODEL_NAME=gemini-1.5-pro
+     Or use another model like `llama3`, `mistral`, `deepseek-coder`, etc.
+     To see all available models, run: `ollama list`
+   
+3. **Set up environment variables (optional)**:
+   - Environment variables are optional - defaults work for local setup
+   - Option 1: Copy `.env.example` to `.env` and customize:
+     ```bash
+     # Linux/Mac:
+     cp .env.example .env
+     
+     # Windows PowerShell:
+     Copy-Item .env.example .env
+     
+     # Then edit .env with your preferred settings
      ```
-   - Note: Default model is `gemini-1.5-pro`. If you get a 404 error, try `gemini-1.5-flash` or use the "List Available Models" button in the app to see all available models.
+   - Option 2: Create `.env` manually with:
+     ```
+     OLLAMA_BASE_URL=http://localhost:11434
+     OLLAMA_MODEL_NAME=deepseek-r1
+     ```
+   - Available environment variables:
+     - `OLLAMA_BASE_URL`: Ollama server URL (default: `http://localhost:11434`)
+     - `OLLAMA_MODEL_NAME`: Model name to use (default: `deepseek-r1`)
+   - Note: Default model is `deepseek-r1`. You can use the "List Available Models" button in the app to see all available models.
+   - Alternatively, you can configure these settings directly in the Streamlit app sidebar without creating a `.env` file.
 
-3. **Run the application**:
+4. **Run the application**:
    ```bash
    streamlit run app.py
+   ```
+   
+   **Important**: Make sure Ollama is running before starting the app. You can verify by running:
+   ```bash
+   ollama list
    ```
 
 ## Usage
 
-1. **Configure API Key**: Enter your Gemini API key in the sidebar
+1. **Configure Ollama**: 
+   - Make sure Ollama is running (`ollama serve` if not already running)
+   - Enter the Ollama base URL in the sidebar (default: http://localhost:11434)
+   - Enter the model name (default: deepseek-r1)
 2. **Set Up Profile**: 
    - Upload your resume (PDF/DOCX/TXT) OR
    - Manually enter your skills and profile information
@@ -62,7 +94,7 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 ├── config.py                       # Configuration constants
 ├── requirements.txt                # Python dependencies
 ├── services/
-│   ├── llm_client.py              # Gemini LLM client wrapper
+│   ├── llm_client.py              # Ollama LLM client wrapper
 │   ├── findsgjobs_client.py       # FindSGJobs API client
 │   └── resume_parser.py           # Resume parsing utilities
 ├── agents/
@@ -81,8 +113,47 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 ## Requirements
 
 - Python 3.10+
-- Google Gemini API key
-- Internet connection for API calls
+- Ollama installed and running ([https://ollama.ai](https://ollama.ai))
+- DeepSeek or another compatible model pulled (e.g., `ollama pull deepseek-r1`)
+- Internet connection for job search API calls
+
+## Troubleshooting
+
+### Ollama Timeout Errors
+
+If you encounter timeout errors (e.g., "Ollama request timeout after 3 attempts"), try the following:
+
+1. **Use a faster model**: The default `deepseek-r1` model can be slow on some hardware. Try:
+   - First, check available models:
+     ```bash
+     ollama list
+     ```
+   - Pull a faster alternative model (commonly available):
+     ```bash
+     ollama pull llama3
+     # or
+     ollama pull mistral
+     # or
+     ollama pull deepseek-coder
+     ```
+   - Then set `OLLAMA_MODEL_NAME` to the model name in your `.env` file or sidebar.
+
+2. **Increase timeout**: Edit `config.py` and increase `OLLAMA_TIMEOUT_SECONDS` (default: 300 seconds).
+
+3. **Check Ollama status**: Verify Ollama is running and responding:
+   ```bash
+   curl http://localhost:11434/api/tags
+   ```
+
+4. **Restart Ollama**: Stop and restart the Ollama server:
+   ```bash
+   # Stop Ollama (Ctrl+C if running in terminal)
+   ollama serve
+   ```
+
+5. **Reduce prompt size**: If processing very long resumes, the prompt might be too large. The system automatically truncates to 4000 characters, but you can reduce this in `agents/junior_researchers.py`.
+
+6. **Check system resources**: Large models require significant CPU/RAM. Monitor your system resources and consider using a smaller model if resources are limited.
 
 ## Notes
 
@@ -93,6 +164,7 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 - **Rate Limiting**: FindSGJobs API is limited to **60 requests per minute per IP**. 
   The application automatically throttles requests to stay within this limit. 
   See [FindSGJobs API documentation](https://www.findsgjobs.com/apis/job/searchable) for details.
+- **Timeout Settings**: Default timeout is 300 seconds (5 minutes). Adjust `OLLAMA_TIMEOUT_SECONDS` in `config.py` if needed.
 
 ## License
 

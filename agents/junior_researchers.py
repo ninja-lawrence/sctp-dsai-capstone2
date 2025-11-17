@@ -18,7 +18,20 @@ def extract_profile_from_resume_text(text: str, llm: LLMClient) -> UserProfile:
         
     Returns:
         UserProfile dictionary
+        
+    Raises:
+        ValueError: If resume text is empty or too short
+        RuntimeError: If LLM call fails
     """
+    # Validate input
+    if not text or not text.strip():
+        error_msg = "Resume text is empty. Please check if the file was parsed correctly."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    if len(text.strip()) < 50:
+        logger.warning(f"Resume text is very short ({len(text.strip())} characters). This may result in incomplete extraction.")
+    
     system_prompt = """You are an expert ATS (Applicant Tracking System) resume parser.
 Your task is to extract structured information from a resume text and return it as JSON.
 
@@ -31,7 +44,7 @@ Extract the following information:
   - company: Company name
   - title: Job title
   - years: Years of experience (numeric or range)
-  - responsibilities: Brief description of responsibilities
+  - responsibilities: Brief description of responsibilities (keep concise, max 200 chars per item)
 - education: List of education entries, each with:
   - institution: School/university name
   - degree: Degree type (e.g., "Bachelor's", "Master's")
@@ -44,14 +57,37 @@ Extract the following information:
 - salary_range_max: Maximum expected salary if mentioned (numeric), or null
 - salary_currency: Currency for salary if mentioned (e.g., "SGD", "USD"), default to "SGD" if not specified
 
-Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
+CRITICAL: You MUST return COMPLETE, valid JSON. The JSON must be properly closed with all brackets and braces.
+- Start with { and end with }
+- All arrays must be properly closed with ]
+- All strings must use double quotes
+- Escape any quotes inside strings with backslash
+- Ensure the JSON is complete - do not truncate mid-field
 
+Return ONLY valid JSON. Do not include markdown code blocks or explanations.
+Make sure to return a valid JSON object with all fields, even if some are null or empty arrays."""
+
+    # Limit text length to avoid token limits, but preserve more context
+    resume_text_preview = text[:4000]
+    if len(text) > 4000:
+        logger.info(f"Resume text truncated from {len(text)} to 4000 characters for LLM processing")
+    
     user_prompt = f"""Parse this resume text and extract the structured information:
 
-{text[:4000]}"""  # Limit text length to avoid token limits
+{resume_text_preview}"""
 
     try:
+        logger.info(f"Calling LLM to extract profile from resume (text length: {len(text)} chars)")
         response = llm.chat_json(system_prompt, user_prompt)
+        
+        # Log the raw response for debugging
+        logger.debug(f"LLM response: {response}")
+        
+        # Validate response is a dictionary
+        if not isinstance(response, dict):
+            error_msg = f"LLM returned invalid response type: {type(response)}. Expected dict."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
         # Ensure all required fields exist
         profile: UserProfile = {
@@ -69,24 +105,31 @@ Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
             "salary_currency": response.get("salary_currency", "SGD"),
         }
         
+        # Validate that we got at least some meaningful data
+        has_data = (
+            profile.get("name") or 
+            profile.get("headline") or 
+            profile.get("summary") or 
+            profile.get("skills") or 
+            profile.get("experience") or 
+            profile.get("education")
+        )
+        
+        if not has_data:
+            logger.warning("LLM returned empty profile. This might indicate an issue with the resume parsing or LLM response.")
+            logger.debug(f"Full LLM response: {response}")
+        
+        logger.info(f"Successfully extracted profile: name={bool(profile.get('name'))}, skills={len(profile.get('skills', []))}, experience={len(profile.get('experience', []))}")
+        
         return profile
+    except ValueError as e:
+        # Re-raise ValueError (validation errors)
+        raise
     except Exception as e:
-        logger.error(f"Error extracting profile: {str(e)}")
-        # Return minimal profile on error
-        return {
-            "name": None,
-            "headline": None,
-            "summary": None,
-            "skills": [],
-            "experience": [],
-            "education": [],
-            "target_roles": [],
-            "experience_level": None,
-            "location": None,
-            "salary_range_min": None,
-            "salary_range_max": None,
-            "salary_currency": "SGD",
-        }
+        error_msg = f"Error extracting profile from resume: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        # Re-raise the exception so the caller can handle it appropriately
+        raise RuntimeError(error_msg) from e
 
 
 def extract_skills_from_job(job: JobPosting, llm: LLMClient) -> ExtractedSkills:
@@ -122,10 +165,27 @@ Description:
     try:
         response = llm.chat_json(system_prompt, user_prompt)
         
+        # Normalize skills lists - ensure they are lists of strings
+        def normalize_skills_list(skills):
+            """Convert skills list to list of strings, handling dicts if present."""
+            if not isinstance(skills, list):
+                return []
+            normalized = []
+            for skill in skills:
+                if isinstance(skill, str):
+                    normalized.append(skill)
+                elif isinstance(skill, dict):
+                    # Extract skill name from dict (try common keys)
+                    skill_name = skill.get("skill") or skill.get("name") or skill.get("title") or str(skill)
+                    normalized.append(skill_name)
+                else:
+                    normalized.append(str(skill))
+            return normalized
+        
         skills: ExtractedSkills = {
-            "hard_skills": response.get("hard_skills", []),
-            "soft_skills": response.get("soft_skills", []),
-            "tools": response.get("tools", []),
+            "hard_skills": normalize_skills_list(response.get("hard_skills", [])),
+            "soft_skills": normalize_skills_list(response.get("soft_skills", [])),
+            "tools": normalize_skills_list(response.get("tools", [])),
             "seniority": response.get("seniority"),
         }
         

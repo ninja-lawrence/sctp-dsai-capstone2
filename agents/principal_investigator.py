@@ -1,4 +1,5 @@
 """Principal Investigator: Finalize and consolidate output."""
+import re
 from typing import List
 from agents.schemas import (
     UserProfile,
@@ -54,15 +55,47 @@ def finalize_output(
     upskilling_roadmap = []
     seen_paths = set()
     
+    def normalize_step(step):
+        """Convert step to string, handling dicts if present, and remove step numbering."""
+        if isinstance(step, str):
+            step_str = step
+        elif isinstance(step, dict):
+            # Extract step text from dict (try common keys)
+            step_str = step.get("step") or step.get("description") or step.get("text") or str(step)
+        else:
+            step_str = str(step)
+        
+        # Remove step numbering patterns like "Step 1:", "Step 1", "1. ", "1)", etc.
+        step_str = re.sub(r'^Step\s+\d+\s*:\s*', '', step_str, flags=re.IGNORECASE)
+        step_str = re.sub(r'^Step\s+\d+\s+', '', step_str, flags=re.IGNORECASE)
+        step_str = re.sub(r'^\d+[\.\)]\s*', '', step_str)
+        step_str = step_str.strip()
+        
+        return step_str
+    
     for gap in gaps:
         for step in gap.get("suggested_learning_path", []):
-            step_lower = step.lower().strip()
+            step_str = normalize_step(step)
+            step_lower = step_str.lower().strip()
             if step_lower and step_lower not in seen_paths:
-                upskilling_roadmap.append(step)
+                upskilling_roadmap.append(step_str)
                 seen_paths.add(step_lower)
     
     # Limit roadmap to top 10 unique items
     upskilling_roadmap = upskilling_roadmap[:10]
+    
+    # Normalize warnings to strings
+    def normalize_warning(warning):
+        """Convert warning to string, handling dicts if present."""
+        if isinstance(warning, str):
+            return warning
+        elif isinstance(warning, dict):
+            return warning.get("message") or warning.get("warning") or str(warning)
+        else:
+            return str(warning)
+    
+    warnings_list = review_result.get('warnings', [])
+    normalized_warnings = [normalize_warning(w) for w in warnings_list[:3]]
     
     # Generate overall summary
     overall_summary = f"""
@@ -71,13 +104,17 @@ Found {len(matches)} job recommendations based on your profile.
 Top matches:
 {chr(10).join(f"- {job['title']} at {job['company']} (Match: {job['match_score']:.1%})" for job in recommended_jobs[:5])}
 
-{'⚠️ ' + '; '.join(review_result.get('warnings', [])[:3]) if review_result.get('warnings') else ''}
+{'⚠️ ' + '; '.join(normalized_warnings) if normalized_warnings else ''}
 """.strip()
+    
+    # Normalize all warnings in final output
+    all_warnings = review_result.get("warnings", [])
+    normalized_all_warnings = [normalize_warning(w) for w in all_warnings]
     
     final_output: FinalOutput = {
         "recommended_jobs": recommended_jobs,
         "skill_gaps": gaps,
-        "warnings": review_result.get("warnings", []),
+        "warnings": normalized_all_warnings,
         "overall_summary": overall_summary,
         "upskilling_roadmap": upskilling_roadmap,
     }

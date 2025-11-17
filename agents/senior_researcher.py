@@ -37,7 +37,7 @@ For a given job, identify:
 1. Matched Skills: Skills the user already has that match the job requirements
 2. Missing Required Skills: Critical skills the user lacks that are essential for the job
 3. Nice-to-Have Skills: Beneficial skills the user lacks but are not critical
-4. Suggested Learning Path: 3-5 high-level steps the user should take to bridge the gap
+4. Suggested Learning Path: 3-5 high-level steps the user should take to bridge the gap (DO NOT include URLs here - URLs go in learning_resources)
 5. Learning Resources: For each missing required skill, suggest 2-3 specific learning resources (schools, online courses, certifications, bootcamps) with actual URLs
 
 For learning resources, provide:
@@ -53,14 +53,36 @@ Focus on well-known, reputable learning platforms and institutions. Include a mi
 - Universities (if applicable)
 - Bootcamps (General Assembly, Le Wagon, etc.)
 
-Return a JSON object with:
-- matched_skills: List of matched skill names
-- missing_required_skills: List of critical missing skills
-- nice_to_have_skills: List of beneficial but not critical missing skills
-- suggested_learning_path: List of 3-5 learning steps (high-level)
-- learning_resources: List of objects, each with {name, url, type, skill}
+CRITICAL: You MUST return a valid JSON object. Start with { and end with }. Do NOT use markdown formatting, numbered lists, or any explanatory text.
 
-Be specific and actionable. Return ONLY valid JSON. Do not include markdown code blocks."""
+Return a JSON object with this exact structure:
+{
+  "matched_skills": ["skill1", "skill2"],
+  "missing_required_skills": ["skill3", "skill4"],
+  "nice_to_have_skills": ["skill5"],
+  "suggested_learning_path": ["Step 1: Brief description without URLs", "Step 2: Brief description without URLs", "Step 3: Brief description without URLs"],
+  "learning_resources": [
+    {
+      "name": "Coursera - Full Stack Web Development",
+      "url": "https://www.coursera.org/...",
+      "type": "online_course",
+      "skill": "Full Stack Development"
+    }
+  ]
+}
+
+IMPORTANT RULES:
+- suggested_learning_path should contain ONLY brief step descriptions (no URLs, no parentheses with URLs)
+- URLs belong ONLY in learning_resources array, not in suggested_learning_path
+- All strings in JSON must use double quotes, escape any quotes inside strings with backslash
+- Do NOT include URLs or parentheses in suggested_learning_path strings
+
+Return ONLY the JSON object. Do NOT include:
+- Markdown code blocks (```json or ```)
+- Numbered lists (1. {...}, 2. {...})
+- Explanatory text before or after the JSON
+- URLs in suggested_learning_path (URLs go in learning_resources only)
+- Any text outside the JSON object"""
 
     user_prompt = f"""User Skills: {user_skills_text}
 
@@ -92,13 +114,30 @@ Analyze the skill gap and provide recommendations."""
                     "skill": resource.get("skill", ""),
                 })
         
+        # Normalize skills lists - ensure they are lists of strings
+        def normalize_skills_list(skills):
+            """Convert skills list to list of strings, handling dicts if present."""
+            if not isinstance(skills, list):
+                return []
+            normalized = []
+            for skill in skills:
+                if isinstance(skill, str):
+                    normalized.append(skill)
+                elif isinstance(skill, dict):
+                    # Extract skill name from dict (try common keys)
+                    skill_name = skill.get("skill") or skill.get("name") or skill.get("title") or str(skill)
+                    normalized.append(skill_name)
+                else:
+                    normalized.append(str(skill))
+            return normalized
+        
         gap_result: SkillGapResult = {
             "job_id": job["id"],
             "job_title": job["title"],
-            "matched_skills": response.get("matched_skills", []),
-            "missing_required_skills": response.get("missing_required_skills", []),
-            "nice_to_have_skills": response.get("nice_to_have_skills", []),
-            "suggested_learning_path": response.get("suggested_learning_path", []),
+            "matched_skills": normalize_skills_list(response.get("matched_skills", [])),
+            "missing_required_skills": normalize_skills_list(response.get("missing_required_skills", [])),
+            "nice_to_have_skills": normalize_skills_list(response.get("nice_to_have_skills", [])),
+            "suggested_learning_path": normalize_skills_list(response.get("suggested_learning_path", [])),
             "learning_resources": learning_resources,
         }
         
