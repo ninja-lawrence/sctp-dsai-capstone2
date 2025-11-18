@@ -783,16 +783,20 @@ def main():
                             except Exception as e:
                                 logger.warning(f"Error displaying job {idx}: {str(e)}")
                                 continue
+    
+    # Tab 3: Skill Gap Analysis
+    with tab3:
+        st.header("Skill Gap Analysis")
         
         # Step 3: Run Skill Gap Analysis
-        st.subheader("Step 3: Run Skill Gap Analysis")
+        # st.subheader("Run Skill Gap Analysis")
         
         if not llm_client:
             st.warning("⚠️ Please configure Gemini API key in the sidebar first.")
         elif not st.session_state["user_profile"].get("skills"):
             st.warning("⚠️ Please set up your profile with skills first.")
         elif not st.session_state["jobs_raw"]:
-            st.warning("⚠️ Please fetch jobs first.")
+            st.warning("⚠️ Please fetch jobs first in the 'Job Search & Recommendations' tab.")
         else:
             # Check if model name might be invalid
             model_name_display = model_name_input or GEMINI_MODEL_NAME
@@ -896,13 +900,12 @@ def main():
                             else:
                                 st.error(f"❌ Error running skill gap analysis: {error_msg}")
                             logger.error(f"Skill gap analysis error: {error_msg}")
-    
-    # Tab 3: Skill Gap Analysis
-    with tab3:
-        st.header("Skill Gap Analysis")
         
+        st.markdown("---")
+        
+        # Display Results
         if not st.session_state["ai_results"]:
-            st.info("👆 Please run skill gap analysis first in the 'Job Search & Recommendations' tab (Step 3).")
+            st.info("👆 Please run skill gap analysis above to see results.")
         else:
             results = st.session_state["ai_results"]
             gaps = results.get("skill_gaps", [])
