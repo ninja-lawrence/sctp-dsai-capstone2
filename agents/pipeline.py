@@ -168,3 +168,136 @@ def run_job_matching_pipeline(
             "upskilling_roadmap": [],
         }
 
+
+def run_skill_gap_analysis_only(
+    llm: LLMClient,
+    profile: UserProfile,
+    raw_jobs: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Run skill gap analysis only (no job recommendations/ranking).
+    
+    Steps:
+    1. Normalize raw jobs -> JobPosting list
+    2. Junior Researchers extract job skills
+    3. Senior Researcher generates skill gaps directly
+    
+    Args:
+        llm: LLM client instance
+        profile: User profile
+        raw_jobs: List of raw job dictionaries from API (typically 1 job)
+        
+    Returns:
+        Final output dictionary with skill gaps only (no recommendations)
+    """
+    logger.info(f"Starting skill gap analysis with {len(raw_jobs)} jobs")
+    
+    # Step 1: Normalize jobs
+    logger.info("Step 1: Normalizing jobs...")
+    normalized_jobs: List[JobPosting] = []
+    for raw_job in raw_jobs:
+        try:
+            normalized_job = normalize_job(raw_job)
+            normalized_jobs.append(normalized_job)
+        except Exception as e:
+            logger.warning(f"Failed to normalize job: {str(e)}")
+            continue
+    
+    if not normalized_jobs:
+        logger.warning("No jobs to process after normalization")
+        return {
+            "recommended_jobs": [],
+            "skill_gaps": [],
+            "warnings": ["No jobs found or failed to normalize jobs"],
+            "overall_summary": "No jobs to analyze.",
+            "upskilling_roadmap": [],
+        }
+    
+    logger.info(f"Normalized {len(normalized_jobs)} jobs")
+    
+    # Step 2: Extract skills from jobs
+    logger.info("Step 2: Extracting skills from jobs...")
+    job_skills = {}
+    import time
+    for idx, job in enumerate(normalized_jobs):
+        try:
+            # Add small delay between requests to help stay within rate limits
+            if idx > 0:
+                time.sleep(0.5)  # 500ms delay between requests
+            skills = extract_skills_from_job(job, llm)
+            job_skills[job["id"]] = skills
+        except Exception as e:
+            error_msg = str(e)
+            # Check if it's a rate limit error
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.error(
+                    f"Rate limit exceeded while extracting skills for job {job.get('id')}. "
+                    f"Please wait a minute before retrying. Error: {error_msg}"
+                )
+                # Stop processing more jobs to avoid hitting limit further
+                break
+            else:
+                logger.warning(f"Failed to extract skills for job {job.get('id')}: {error_msg}")
+            continue
+    
+    logger.info(f"Extracted skills from {len(job_skills)} jobs")
+    
+    # Step 3: Generate skill gaps directly (no ranking)
+    logger.info("Step 3: Generating skill gap analysis...")
+    gaps = []
+    import time
+    for idx, job in enumerate(normalized_jobs):
+        try:
+            # Add small delay between requests to help stay within rate limits
+            if idx > 0:
+                time.sleep(0.5)  # 500ms delay between requests
+            skills = job_skills.get(job["id"], {})
+            gap = generate_skill_gap_for_match(profile, job, skills, llm)
+            gaps.append(gap)
+        except Exception as e:
+            error_msg = str(e)
+            # Check if it's a rate limit error
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.error(
+                    f"Rate limit exceeded while generating skill gap for job {job.get('id')}. "
+                    f"Please wait a minute before retrying. Error: {error_msg}"
+                )
+                # Stop processing more jobs to avoid hitting limit further
+                break
+            else:
+                logger.warning(f"Failed to generate gap for job {job.get('id')}: {error_msg}")
+            continue
+    
+    logger.info(f"Generated {len(gaps)} skill gap analyses")
+    
+    # Build upskilling roadmap (aggregate from all gaps)
+    upskilling_roadmap = []
+    seen_paths = set()
+    
+    for gap in gaps:
+        for step in gap.get("suggested_learning_path", []):
+            step_lower = step.lower().strip()
+            if step_lower and step_lower not in seen_paths:
+                upskilling_roadmap.append(step)
+                seen_paths.add(step_lower)
+    
+    # Limit roadmap to top 10 unique items
+    upskilling_roadmap = upskilling_roadmap[:10]
+    
+    # Generate overall summary
+    if gaps:
+        job_titles = [gap.get("job_title", "Unknown") for gap in gaps]
+        overall_summary = f"Skill gap analysis completed for {len(gaps)} job(s): {', '.join(job_titles)}"
+    else:
+        overall_summary = "No skill gap analysis available."
+    
+    final_output = {
+        "recommended_jobs": [],  # Empty - no recommendations
+        "skill_gaps": gaps,
+        "warnings": [],
+        "overall_summary": overall_summary,
+        "upskilling_roadmap": upskilling_roadmap,
+    }
+    
+    logger.info("Skill gap analysis completed successfully")
+    return final_output
