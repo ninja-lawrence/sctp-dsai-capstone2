@@ -27,7 +27,7 @@ FIND_SGJOBS_RATE_LIMIT = 60  # Requests per minute (per IP)
 FIND_SGJOBS_RATE_LIMIT_WINDOW = 60  # Time window in seconds
 
 # Application Configuration
-APP_TITLE = "SCTP Job Recommender & Skill Gap Analyzer"
+APP_TITLE = "SCTP Job Search & Skill Gap Analyzer"
 DEFAULT_KEYWORDS = "data analyst"
 TOP_K_JOBS = 10
 

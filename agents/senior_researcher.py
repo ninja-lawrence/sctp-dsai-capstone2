@@ -36,6 +36,8 @@ def generate_skill_gap_for_match(
 For a given job, identify:
 1. Matched Skills: Skills the user already has that match the job requirements
 2. Missing Required Skills: Critical skills the user lacks that are essential for the job
+   - Provide a list of missing required skills
+   - Also provide a narrative writeup (maximum 200 words) explaining the skill gaps, why these skills are critical for the role, and how they impact the user's ability to perform the job effectively
 3. Nice-to-Have Skills: Beneficial skills the user lacks but are not critical
 4. Suggested Learning Path: 3-5 high-level steps the user should take to bridge the gap
 5. Learning Resources: For each missing required skill, suggest 2-3 specific learning resources (schools, online courses, certifications, bootcamps) with actual URLs
@@ -56,6 +58,7 @@ Focus on well-known, reputable learning platforms and institutions. Include a mi
 Return a JSON object with:
 - matched_skills: List of matched skill names
 - missing_required_skills: List of critical missing skills
+- missing_required_skills_writeup: A narrative writeup (maximum 200 words) explaining the missing required skills, why they are critical, and their impact on job performance. Write in a clear, professional tone.
 - nice_to_have_skills: List of beneficial but not critical missing skills
 - suggested_learning_path: List of 3-5 learning steps (high-level)
 - learning_resources: List of objects, each with {name, url, type, skill}
@@ -97,6 +100,7 @@ Analyze the skill gap and provide recommendations."""
             "job_title": job["title"],
             "matched_skills": response.get("matched_skills", []),
             "missing_required_skills": response.get("missing_required_skills", []),
+            "missing_required_skills_writeup": response.get("missing_required_skills_writeup", ""),
             "nice_to_have_skills": response.get("nice_to_have_skills", []),
             "suggested_learning_path": response.get("suggested_learning_path", []),
             "learning_resources": learning_resources,
@@ -112,6 +116,7 @@ Analyze the skill gap and provide recommendations."""
             "job_title": job["title"],
             "matched_skills": [],
             "missing_required_skills": [],
+            "missing_required_skills_writeup": "Unable to generate skill gap analysis due to an error. Please review the job requirements manually.",
             "nice_to_have_skills": [],
             "suggested_learning_path": ["Error during analysis - please review job manually"],
             "learning_resources": [],

@@ -1,4 +1,4 @@
-"""Main Streamlit application for SCTP Job Recommender & Skill Gap Analyzer."""
+"""Main Streamlit application for SCTP Job Search & Skill Gap Analyzer."""
 import streamlit as st
 import json
 import re
@@ -124,7 +124,7 @@ def main():
     
     # Sidebar configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        # st.header("⚙️ Configuration")
         
         # Job Search Settings
         st.subheader("Job Search Settings")
@@ -196,13 +196,13 @@ def main():
     
     # Show prominent message if we need to switch tabs
     if switch_to_tab2:
-        st.info("🔍 **Search initiated!** Please click on the **'Job Search & Recommendations'** tab above to see your results.", icon="ℹ️")
+        st.info("🔍 **Search initiated!** Please click on the **'Job Search'** tab above to see your results.", icon="ℹ️")
     
     # Main content tabs
     # Use a unique key to preserve tab state
     tab1, tab2, tab3, tab4 = st.tabs([
         "👤 Profile",
-        "🔍 Job Search & Recommendations",
+        "🔍 Job Search",
         "📊 Skill Gap Analysis",
         "🐛 Debug / Raw Data",
     ])
@@ -432,7 +432,7 @@ def main():
     
     # Tab 2: Job Search & Recommendations
     with tab2:
-        st.header("Job Search & AI Recommendations")
+        st.header("Job Search")
         
         # Step 1: Job Search
         st.subheader("Step 1: Search Jobs")
@@ -796,7 +796,7 @@ def main():
         elif not st.session_state["user_profile"].get("skills"):
             st.warning("⚠️ Please set up your profile with skills first.")
         elif not st.session_state["jobs_raw"]:
-            st.warning("⚠️ Please fetch jobs first in the 'Job Search & Recommendations' tab.")
+            st.warning("⚠️ Please fetch jobs first in the 'Job Search' tab.")
         else:
             # Check if model name might be invalid
             model_name_display = model_name_input or GEMINI_MODEL_NAME
@@ -926,11 +926,16 @@ def main():
                                 st.write("None")
                             
                             st.write("**❌ Missing Required Skills:**")
-                            missing_skills = gap.get("missing_required_skills") or []
-                            if missing_skills and isinstance(missing_skills, list):
-                                st.write(", ".join(missing_skills))
+                            missing_skills_writeup = gap.get("missing_required_skills_writeup", "")
+                            if missing_skills_writeup:
+                                st.write(missing_skills_writeup)
                             else:
-                                st.write("None")
+                                # Fallback to list if writeup not available
+                                missing_skills = gap.get("missing_required_skills") or []
+                                if missing_skills and isinstance(missing_skills, list):
+                                    st.write(", ".join(missing_skills))
+                                else:
+                                    st.write("None")
                         
                         with col2:
                             st.write("**⭐ Nice-to-Have Skills:**")
@@ -977,6 +982,17 @@ def main():
                                     resource_url = resource.get("url", "#")
                                     resource_type = resource.get("type", "online_course")
                                     
+                                    # Validate URL before displaying
+                                    if not resource_url or resource_url == "#" or not resource_url.startswith(('http://', 'https://')):
+                                        # Invalid URL - display as text only
+                                        icon = "📖"
+                                        st.markdown(
+                                            f'{icon} **{resource_name}** '
+                                            f'<span style="color: #6c757d; font-size: 0.9em;">({resource_type.replace("_", " ").title()}) - <span style="color: #dc3545;">Invalid URL</span></span>',
+                                            unsafe_allow_html=True
+                                        )
+                                        continue
+                                    
                                     # Icon based on type
                                     type_icons = {
                                         "university": "🏛️",
@@ -988,9 +1004,12 @@ def main():
                                     }
                                     icon = type_icons.get(resource_type, "📖")
                                     
+                                    # Escape URL for HTML safety
+                                    escaped_url = resource_url.replace('"', '&quot;').replace("'", "&#x27;")
+                                    
                                     # Display as clickable link
                                     st.markdown(
-                                        f'{icon} <a href="{resource_url}" target="_blank" style="text-decoration: none; color: #1f77b4; font-weight: 500;">{resource_name}</a> '
+                                        f'{icon} <a href="{escaped_url}" target="_blank" rel="noopener noreferrer" style="text-decoration: none; color: #1f77b4; font-weight: 500;">{resource_name}</a> '
                                         f'<span style="color: #6c757d; font-size: 0.9em;">({resource_type.replace("_", " ").title()})</span>',
                                         unsafe_allow_html=True
                                     )

@@ -1,6 +1,10 @@
-# SCTP Job Recommender & Skill Gap Analyzer
+# SCTP Job Search & Skill Gap Analyzer
 
 An AI-driven job recommendation and skill gap analysis system built with Streamlit and Google Gemini LLM.
+
+## 🌐 Live Demo
+
+**Deployed Application**: [https://dsai-findsgjob-capstone.streamlit.app/](https://dsai-findsgjob-capstone.streamlit.app/)
 
 ## Features
 

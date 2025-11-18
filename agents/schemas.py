@@ -60,6 +60,7 @@ class SkillGapResult(TypedDict, total=False):
     job_title: str
     matched_skills: List[str]
     missing_required_skills: List[str]
+    missing_required_skills_writeup: Optional[str]  # Narrative writeup (max 200 words) about missing skills
     nice_to_have_skills: List[str]
     suggested_learning_path: List[str]  # High-level upskilling suggestions
     learning_resources: List[LearningResource]  # Links to schools/institutions/certifications
