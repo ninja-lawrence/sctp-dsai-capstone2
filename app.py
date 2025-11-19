@@ -18,6 +18,7 @@ from services.resume_parser import parse_resume
 from agents.junior_researchers import extract_profile_from_resume_text
 from agents.schemas import UserProfile
 from agents.pipeline import run_job_matching_pipeline, run_skill_gap_analysis_only
+from agents.supervisor import rank_jobs_lightweight
 from utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -49,6 +50,9 @@ if "user_profile" not in st.session_state:
 
 if "jobs_raw" not in st.session_state:
     st.session_state["jobs_raw"] = []
+
+if "job_match_scores" not in st.session_state:
+    st.session_state["job_match_scores"] = {}  # Maps job_id to match_score
 
 if "ai_results" not in st.session_state:
     st.session_state["ai_results"] = None
@@ -495,6 +499,54 @@ def main():
                             )
                         else:
                             st.success(f"✅ Fetched {len(jobs)} jobs!")
+                            
+                            # Run job matching to sort by relevance
+                            user_profile = st.session_state["user_profile"]
+                            if llm_client and user_profile.get("skills"):
+                                with st.spinner("🔍 Ranking jobs by relevance..."):
+                                    try:
+                                        # Normalize jobs for ranking
+                                        normalized_jobs = []
+                                        raw_to_normalized = {}  # Map raw job index to normalized job
+                                        for idx, raw_job in enumerate(jobs):
+                                            try:
+                                                normalized_job = normalize_job(raw_job)
+                                                normalized_jobs.append(normalized_job)
+                                                raw_to_normalized[idx] = normalized_job
+                                            except Exception as e:
+                                                logger.warning(f"Failed to normalize job for ranking: {str(e)}")
+                                                continue
+                                        
+                                        if normalized_jobs:
+                                            # Get match scores
+                                            match_scores = rank_jobs_lightweight(
+                                                profile=user_profile,
+                                                jobs=normalized_jobs,
+                                                llm=llm_client
+                                            )
+                                            
+                                            # Store match scores in session state
+                                            st.session_state["job_match_scores"] = match_scores
+                                            
+                                            # Sort jobs_raw by match score (highest first)
+                                            def get_match_score(idx_and_job):
+                                                idx, raw_job = idx_and_job
+                                                if idx in raw_to_normalized:
+                                                    job_id = raw_to_normalized[idx]["id"]
+                                                    return match_scores.get(job_id, 0.0)
+                                                return 0.0
+                                            
+                                            # Create list of (index, job) tuples for sorting
+                                            indexed_jobs = list(enumerate(jobs))
+                                            indexed_jobs_sorted = sorted(indexed_jobs, key=get_match_score, reverse=True)
+                                            jobs_sorted = [job for _, job in indexed_jobs_sorted]
+                                            
+                                            st.session_state["jobs_raw"] = jobs_sorted
+                                            st.info(f"✨ Jobs sorted by relevance (most relevant first)")
+                                    except Exception as e:
+                                        logger.warning(f"Job ranking failed: {str(e)}")
+                                        # Continue with unsorted jobs
+                                        pass
                         
                         # Show updated rate limit status
                         new_rate_status = get_rate_limit_status()
@@ -620,8 +672,24 @@ def main():
                                 job_title = str(job.get('title', 'N/A')) if job.get('title') else 'N/A'
                                 job_company = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
                                 job_location = str(job.get('location', 'N/A')) if job.get('location') else 'N/A'
+                                job_id = job.get('id', '')
                                 
-                                st.markdown(f"**{job_title}**")
+                                # Get match percentage if available
+                                match_scores = st.session_state.get("job_match_scores", {})
+                                match_badge = ""
+                                if job_id in match_scores:
+                                    match_score = match_scores[job_id]
+                                    match_percentage = match_score * 100
+                                    # Color code based on match score
+                                    if match_percentage >= 70:
+                                        color = "#28a745"  # Green
+                                    elif match_percentage >= 40:
+                                        color = "#ffc107"  # Yellow
+                                    else:
+                                        color = "#dc3545"  # Red
+                                    match_badge = f' <span style="background-color: {color}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.85em; font-weight: bold;">{match_percentage:.0f}% Match</span>'
+                                
+                                st.markdown(f"**{job_title}**{match_badge}", unsafe_allow_html=True)
                                 st.markdown(f"*{job_company}* • 📍 {job_location}")
                                 
                                 # Meta info
@@ -725,7 +793,24 @@ def main():
                                         
                                         # Title
                                         job_title = str(job.get('title', 'N/A')) if job.get('title') else 'N/A'
-                                        st.markdown(f"### {job_title}")
+                                        job_id = job.get('id', '')
+                                        
+                                        # Get match percentage if available
+                                        match_scores = st.session_state.get("job_match_scores", {})
+                                        match_badge = ""
+                                        if job_id in match_scores:
+                                            match_score = match_scores[job_id]
+                                            match_percentage = match_score * 100
+                                            # Color code based on match score
+                                            if match_percentage >= 70:
+                                                color = "#28a745"  # Green
+                                            elif match_percentage >= 40:
+                                                color = "#ffc107"  # Yellow
+                                            else:
+                                                color = "#dc3545"  # Red
+                                            match_badge = f' <span style="background-color: {color}; color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.9em; font-weight: bold;">{match_percentage:.0f}% Match</span>'
+                                        
+                                        st.markdown(f"### {job_title}{match_badge}", unsafe_allow_html=True)
                                         
                                         # Company and location
                                         job_company = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
@@ -811,17 +896,27 @@ def main():
             
             # Prepare job options for selectbox
             job_options = []
+            match_scores = st.session_state.get("job_match_scores", {})
             for idx, job_raw in enumerate(st.session_state["jobs_raw"]):
                 try:
                     job = normalize_job(job_raw)
                     job_title = str(job.get('title', 'N/A')) if job.get('title') else 'N/A'
                     job_company = str(job.get('company', 'Unknown')) if job.get('company') else 'Unknown'
                     job_location = str(job.get('location', '')) if job.get('location') else ''
+                    job_id = job.get('id', '')
+                    
+                    # Get match percentage if available
+                    match_percentage = ""
+                    if job_id in match_scores:
+                        match_score = match_scores[job_id]
+                        match_percentage = f" - {match_score*100:.0f}% Match"
                     
                     # Format option text
                     option_text = f"{job_title} - {job_company}"
                     if job_location:
                         option_text += f" ({job_location})"
+                    if match_percentage:
+                        option_text += match_percentage
                     
                     job_options.append((option_text, idx))
                 except Exception as e:
@@ -845,7 +940,13 @@ def main():
                 # Show selected job preview
                 try:
                     preview_job = normalize_job(selected_job[0])
-                    st.info(f"📋 **Selected:** {preview_job.get('title', 'N/A')} at {preview_job.get('company', 'Unknown')}")
+                    preview_text = f"📋 **Selected:** {preview_job.get('title', 'N/A')} at {preview_job.get('company', 'Unknown')}"
+                    preview_job_id = preview_job.get('id', '')
+                    match_scores = st.session_state.get("job_match_scores", {})
+                    if preview_job_id in match_scores:
+                        match_score = match_scores[preview_job_id]
+                        preview_text += f" - **{match_score*100:.0f}% Match**"
+                    st.info(preview_text)
                 except:
                     st.info(f"📋 **Selected:** Job #{selected_idx + 1}")
             else:

@@ -10,9 +10,13 @@ An AI-driven job recommendation and skill gap analysis system built with Streaml
 
 - 🔍 **Job Search**: Search jobs from FindSGJobs API
 - 👤 **Profile Management**: Upload resume or manually enter profile information
-- 🤖 **AI-Powered Matching**: Multi-agent LLM system for job matching
+- 🤖 **AI-Powered Matching**: 
+  - Automatic job ranking after search (lightweight matching)
+  - Multi-agent LLM system for detailed job matching
+  - Match percentage display with color-coded badges
 - 📊 **Skill Gap Analysis**: Detailed analysis of skills needed vs. skills possessed
 - 🎯 **Upskilling Roadmap**: Personalized learning path recommendations
+- 📈 **Smart Sorting**: Jobs automatically sorted by relevance (most relevant first)
 
 ## Architecture
 
@@ -47,15 +51,24 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 
 ## Usage
 
-1. **Configure API Key**: Enter your Gemini API key in the sidebar
+1. **Configure API Key**: Enter your Gemini API key in the sidebar (or set in config.py)
 2. **Set Up Profile**: 
    - Upload your resume (PDF/DOCX/TXT) OR
    - Manually enter your skills and profile information
-3. **Search Jobs**: Enter keywords and fetch jobs from FindSGJobs
-4. **Run AI Analysis**: Click "Run AI Job Recommendations & Skill Gap Analysis"
+3. **Search Jobs**: 
+   - Enter keywords and fetch jobs from FindSGJobs
+   - **Automatic Ranking**: If your profile has skills, jobs are automatically sorted by relevance
+   - View match percentages with color-coded badges:
+     - 🟢 Green (≥70%): Strong match
+     - 🟡 Yellow (40-69%): Moderate match
+     - 🔴 Red (<40%): Weak match
+4. **Skill Gap Analysis**: 
+   - Select a job from the dropdown (sorted by relevance)
+   - Click "Run Skill Gap Analysis"
+   - Review detailed analysis with learning recommendations
 5. **Review Results**: 
-   - View recommended jobs with match scores
-   - Check skill gap analysis for each job
+   - Check skill gap analysis for selected job
+   - View matched skills, missing skills, and learning resources
    - Review upskilling roadmap
 
 ## Project Structure
@@ -94,9 +107,11 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 - All intelligence comes from prompt engineering and multi-agent workflows
 - Resume parsing supports PDF, DOCX, and TXT formats
 - Job data is fetched from FindSGJobs public API
-- **Rate Limiting**: FindSGJobs API is limited to **60 requests per minute per IP**. 
-  The application automatically throttles requests to stay within this limit. 
-  See [FindSGJobs API documentation](https://www.findsgjobs.com/apis/job/searchable) for details.
+- **Automatic Job Matching**: After searching for jobs, if your profile contains skills, the system automatically ranks jobs by relevance and displays match percentages
+- **Rate Limiting**: 
+  - FindSGJobs API: **60 requests per minute per IP** (automatically throttled)
+  - Gemini API: **10 requests per minute per model** (free tier, automatically throttled)
+  - See [FindSGJobs API documentation](https://www.findsgjobs.com/apis/job/searchable) for details
 
 ## License
 
