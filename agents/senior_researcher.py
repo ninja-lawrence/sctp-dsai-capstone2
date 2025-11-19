@@ -2,6 +2,7 @@
 from agents.schemas import UserProfile, JobPosting, ExtractedSkills, SkillGapResult, LearningResource
 from services.llm_client import LLMClient
 from utils.logging_utils import get_logger
+from utils.web_search_utils import search_learning_resources
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,37 @@ def generate_skill_gap_for_match(
     job_soft_skills = job_skills.get("soft_skills", [])
     job_tools = job_skills.get("tools", [])
     
+    # Identify missing skills early to search for current learning resources
+    all_job_skills = set(job_hard_skills + job_tools)
+    user_skills_set = set(user_skills)
+    missing_skills = list(all_job_skills - user_skills_set)
+    
+    # Search for current learning resources for missing skills
+    learning_resources_context = {}
+    if missing_skills:
+        logger.info(f"Searching for learning resources for {len(missing_skills)} missing skills")
+        for skill in missing_skills[:5]:  # Limit to top 5 to avoid too many searches
+            try:
+                resources = search_learning_resources(skill, max_results=3)
+                if resources:
+                    learning_resources_context[skill] = resources
+                    logger.info(f"Found {len(resources)} resources for skill: {skill}")
+            except Exception as e:
+                logger.warning(f"Failed to search for resources for {skill}: {str(e)}")
+                continue
+    
+    # Build context string from web search results
+    resources_context_text = ""
+    if learning_resources_context:
+        resources_context_text = "\n\n**Current Learning Resources Found (from web search - use these verified URLs):**\n"
+        for skill, resources in learning_resources_context.items():
+            resources_context_text += f"\nFor skill '{skill}':\n"
+            for res in resources:
+                resources_context_text += f"- **{res['name']}**: {res['url']} (Type: {res['type']})\n"
+                if res.get('description'):
+                    resources_context_text += f"  Description: {res['description'][:150]}...\n"
+        resources_context_text += "\nIMPORTANT: Prioritize using the URLs from the web search results above as they are current and verified. You may supplement with additional well-known resources if needed.\n"
+    
     system_prompt = """You are a career advisor and skill gap analyst. Your task is to analyze the gap between a user's skills and a job's requirements.
 
 For a given job, identify:
@@ -42,9 +74,11 @@ For a given job, identify:
 4. Suggested Learning Path: 3-5 high-level steps the user should take to bridge the gap
 5. Learning Resources: For each missing required skill, suggest 2-3 specific learning resources (schools, online courses, certifications, bootcamps) with actual URLs
 
+IMPORTANT: Use the learning resources provided in the context below (from current web search) as your primary source. These are verified, current URLs from 2024. You may supplement with additional well-known resources if needed, but prioritize the provided resources.
+
 For learning resources, provide:
 - name: Name of the institution/course/certification (e.g., "Coursera - Google Data Analytics", "AWS Certified Solutions Architect", "General Assembly Data Science Bootcamp")
-- url: Actual URL to the learning resource (must be a real, accessible URL)
+- url: Actual URL to the learning resource (must be a real, accessible URL - prefer URLs from the web search context provided)
 - type: One of: "university", "online_course", "certification", "bootcamp", "training_program", "mooc"
 - skill: The specific skill this resource helps learn
 
@@ -77,8 +111,9 @@ Tools: {', '.join(job_tools)}
 
 Job Description:
 {job['description'][:2000]}
+{resources_context_text}
 
-Analyze the skill gap and provide recommendations."""
+Analyze the skill gap and provide recommendations. Use the learning resources from the web search context above when available, as they are current and verified."""
 
     try:
         response = llm.chat_json(system_prompt, user_prompt)
