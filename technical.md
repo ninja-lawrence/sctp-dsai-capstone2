@@ -57,7 +57,8 @@ Located in `agents/pipeline.py`, this function orchestrates the complete workflo
 
 **Step 4: Generate Skill Gaps**
 - For each top-ranked job, calls `generate_skill_gap_for_match()` (Senior Researcher)
-- Generates detailed gap analysis including learning resources
+- **Web Search Integration**: Before generating recommendations, searches for current learning resources for missing skills
+- Generates detailed gap analysis including learning resources with current URLs from web search
 - Includes 500ms delay between requests
 
 **Step 5: Review Board**
@@ -189,11 +190,17 @@ Extracts structured skills from job postings.
 
 **Function**: `generate_skill_gap_for_match(profile, job, job_skills, llm)`
 
+**Web Search Integration**:
+- **Before Analysis**: Identifies missing skills by comparing user skills with job requirements
+- **Web Search**: Uses DuckDuckGo Search to find current learning resources for top 5 missing skills
+- **Context Injection**: Search results (with URLs) are included in the LLM prompt as context
+- **Current Resources**: Ensures learning resource URLs are up-to-date and relevant (searches include "2024" in query)
+
 **Prompt Strategy**:
 - **System Prompt**: Defines agent as "career advisor and skill gap analyst"
 - **Why**: Career advisor framing helps generate actionable, user-friendly recommendations
 - **Structured Analysis**: Five-part analysis (matched, missing required, nice-to-have, learning path, resources)
-- **Learning Resources**: Requires actual URLs to real learning platforms
+- **Learning Resources**: Uses web search results as primary source, supplemented with well-known platforms
 
 **Key Prompt Elements**:
 ```
@@ -210,9 +217,9 @@ For a given job, identify:
 ```
 
 **Learning Resources Requirements**:
-- Must be well-known, reputable platforms
+- **Primary Source**: Web search results (current URLs from 2024)
+- **Supplemental**: Well-known, reputable platforms (Coursera, edX, Udemy, Udacity, Khan Academy, AWS/Google/Microsoft certifications, universities, bootcamps)
 - Mix of free and paid options
-- Include: Coursera, edX, Udemy, Udacity, Khan Academy, AWS/Google/Microsoft certifications, universities, bootcamps
 - Each resource must have: name, url, type, skill
 
 **Output Structure**:
@@ -430,6 +437,30 @@ This helps users quickly identify the most relevant jobs without running full sk
 
 ## Technical Implementation Details
 
+### Web Search Utility (`utils/web_search_utils.py`)
+
+**Purpose**: Find current learning resources for missing skills using web search.
+
+**Function**: `search_learning_resources(skill, max_results=5)`
+
+**Implementation**:
+- Uses DuckDuckGo Search API (via `duckduckgo-search` library)
+- Searches for: `"{skill} online course certification training 2024"`
+- Parses search results and categorizes by type (online_course, certification, bootcamp, university, mooc)
+- Returns structured resources with: name, url, type, description
+
+**Resource Type Classification**:
+- **online_course**: Coursera, edX, Udemy, Udacity, Khan Academy, Pluralsight
+- **certification**: AWS, Google Cloud, Microsoft Learn, IBM, Oracle
+- **bootcamp**: General Assembly, Le Wagon, Flatiron School, Springboard
+- **university**: .edu domains, university/college paths
+- **mooc**: MOOC.org, FutureLearn, ClassCentral, Alison
+
+**Integration**:
+- Called by Senior Researcher before generating skill gap analysis
+- Results included in LLM prompt context
+- LLM instructed to prioritize web search URLs as current and relevant
+
 ### LLM Client (`services/llm_client.py`)
 
 **GeminiClient**:
@@ -475,6 +506,14 @@ This helps users quickly identify the most relevant jobs without running full sk
 - Top K jobs: 10
 - Employment types, currencies, salary intervals mappings
 
+### Dependencies (`requirements.txt`)
+- **duckduckgo-search**: Web search library for finding current learning resources
+- **google-generativeai**: Google Gemini LLM client
+- **streamlit**: Web application framework
+- **requests**: HTTP library for API calls
+- **pypdf**, **python-docx**: Resume parsing
+- Other utilities: pandas, python-dotenv, pydantic, typing-extensions
+
 ## Future Improvements
 
 1. **Parallel Processing**: Run skill extraction in parallel for multiple jobs
@@ -483,4 +522,5 @@ This helps users quickly identify the most relevant jobs without running full sk
 4. **Batch Processing**: Process multiple jobs in single LLM call
 5. **Fine-tuning**: Fine-tune prompts based on user feedback
 6. **Multi-model**: Support multiple LLM providers (OpenAI, Anthropic, etc.)
+7. **Search Optimization**: Improve search queries and result filtering for better learning resource discovery
 

@@ -16,6 +16,7 @@ An AI-driven job recommendation and skill gap analysis system built with Streaml
   - Match percentage display with color-coded badges
 - 📊 **Skill Gap Analysis**: Detailed analysis of skills needed vs. skills possessed
 - 🎯 **Upskilling Roadmap**: Personalized learning path recommendations
+- 🌐 **Current Learning Resources**: Web search integration finds up-to-date learning resources and courses
 - 📈 **Smart Sorting**: Jobs automatically sorted by relevance (most relevant first)
 
 ## Architecture
@@ -92,7 +93,8 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 │   └── pipeline.py                # Pipeline orchestration
 └── utils/
     ├── logging_utils.py           # Logging utilities
-    └── text_cleaning.py           # Text processing utilities
+    ├── text_cleaning.py           # Text processing utilities
+    └── web_search_utils.py         # Web search for current learning resources
 ```
 
 ## Requirements
@@ -108,6 +110,7 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
 - Resume parsing supports PDF, DOCX, and TXT formats
 - Job data is fetched from FindSGJobs public API
 - **Automatic Job Matching**: After searching for jobs, if your profile contains skills, the system automatically ranks jobs by relevance and displays match percentages
+- **Current Learning Resources**: The system uses web search to find up-to-date learning resources, courses, and certifications for missing skills, ensuring URLs are current and relevant
 - **Rate Limiting**: 
   - FindSGJobs API: **60 requests per minute per IP** (automatically throttled)
   - Gemini API: **10 requests per minute per model** (free tier, automatically throttled)
