@@ -41,9 +41,9 @@ The system uses a multi-agent architecture inspired by Fareed Khan's "Building a
    - Add your Google Gemini API key:
      ```
      GEMINI_API_KEY=your_api_key_here
-     GEMINI_MODEL_NAME=gemini-1.5-pro
+     GEMINI_MODEL_NAME=gemini-2.5-pro
      ```
-   - Note: Default model is `gemini-1.5-pro`. If you get a 404 error, try `gemini-1.5-flash` or use the "List Available Models" button in the app to see all available models.
+   - Note: Default model is `gemini-2.5-pro`. If you get a 404 error, try `gemini-2.5-flash` or use the "List Available Models" button in the app to see all available models.
 
 3. **Run the application**:
    ```bash

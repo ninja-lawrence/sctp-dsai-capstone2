@@ -370,6 +370,125 @@ def main():
             )
         
         st.markdown("---")
+        
+        # Employment History Section
+        st.markdown("#### Employment History")
+        
+        # Initialize employment history editing state
+        if "editing_experience_idx" not in st.session_state:
+            st.session_state["editing_experience_idx"] = None
+        
+        # Get current experience list
+        experience_list = profile.get("experience", [])
+        if not isinstance(experience_list, list):
+            experience_list = []
+        
+        # Display existing employment history entries
+        if experience_list:
+            st.markdown("**Current Employment History:**")
+            for idx, exp in enumerate(experience_list):
+                with st.expander(f"💼 {exp.get('title', 'Untitled')} at {exp.get('company', 'Unknown Company')}", expanded=False):
+                    col_info, col_actions = st.columns([4, 1])
+                    
+                    with col_info:
+                        st.write(f"**Company:** {exp.get('company', 'N/A')}")
+                        st.write(f"**Title:** {exp.get('title', 'N/A')}")
+                        st.write(f"**Years:** {exp.get('years', 'N/A')}")
+                        if exp.get('responsibilities'):
+                            st.write(f"**Responsibilities:** {exp.get('responsibilities', 'N/A')}")
+                    
+                    with col_actions:
+                        if st.button("✏️ Edit", key=f"edit_exp_{idx}", use_container_width=True):
+                            st.session_state["editing_experience_idx"] = idx
+                            st.rerun()
+                        if st.button("🗑️ Delete", key=f"delete_exp_{idx}", use_container_width=True):
+                            experience_list.pop(idx)
+                            st.session_state["user_profile"]["experience"] = experience_list
+                            st.success("✅ Employment entry deleted!")
+                            st.rerun()
+        else:
+            st.info("💡 No employment history entries yet. Add your work experience below.")
+        
+        # Add/Edit Employment Entry Form
+        st.markdown("---")
+        if st.session_state["editing_experience_idx"] is not None:
+            st.markdown("**✏️ Edit Employment Entry**")
+            edit_idx = st.session_state["editing_experience_idx"]
+            edit_exp = experience_list[edit_idx] if edit_idx < len(experience_list) else {}
+        else:
+            st.markdown("**➕ Add New Employment Entry**")
+            edit_exp = {}
+        
+        col_exp1, col_exp2 = st.columns(2)
+        
+        with col_exp1:
+            exp_company = st.text_input(
+                "Company Name",
+                value=edit_exp.get("company", ""),
+                key="exp_company_input",
+                help="Name of the company"
+            )
+            exp_title = st.text_input(
+                "Job Title",
+                value=edit_exp.get("title", ""),
+                key="exp_title_input",
+                help="Your job title/position"
+            )
+        
+        with col_exp2:
+            exp_years = st.text_input(
+                "Years/Duration",
+                value=edit_exp.get("years", ""),
+                key="exp_years_input",
+                help="Years of experience or duration (e.g., '2 years', '2020-2022')"
+            )
+        
+        exp_responsibilities = st.text_area(
+            "Responsibilities & Achievements",
+            value=edit_exp.get("responsibilities", ""),
+            key="exp_responsibilities_input",
+            height=100,
+            help="Brief description of your responsibilities and key achievements"
+        )
+        
+        col_save_exp, col_cancel_exp = st.columns([1, 1])
+        
+        with col_save_exp:
+            if st.button("💾 Save Entry", key="save_exp_button", use_container_width=True):
+                if exp_company.strip() and exp_title.strip():
+                    new_entry = {
+                        "company": exp_company.strip(),
+                        "title": exp_title.strip(),
+                        "years": exp_years.strip() if exp_years.strip() else None,
+                        "responsibilities": exp_responsibilities.strip() if exp_responsibilities.strip() else None,
+                    }
+                    
+                    if st.session_state["editing_experience_idx"] is not None:
+                        # Update existing entry
+                        edit_idx = st.session_state["editing_experience_idx"]
+                        if edit_idx < len(experience_list):
+                            experience_list[edit_idx] = new_entry
+                            st.success("✅ Employment entry updated!")
+                        else:
+                            experience_list.append(new_entry)
+                            st.success("✅ Employment entry added!")
+                    else:
+                        # Add new entry
+                        experience_list.append(new_entry)
+                        st.success("✅ Employment entry added!")
+                    
+                    st.session_state["user_profile"]["experience"] = experience_list
+                    st.session_state["editing_experience_idx"] = None
+                    st.rerun()
+                else:
+                    st.error("❌ Please fill in at least Company Name and Job Title.")
+        
+        with col_cancel_exp:
+            if st.button("❌ Cancel", key="cancel_exp_button", use_container_width=True):
+                st.session_state["editing_experience_idx"] = None
+                st.rerun()
+        
+        st.markdown("---")
         st.markdown("#### Job Preferences")
         
         col3, col4 = st.columns(2)
@@ -418,12 +537,17 @@ def main():
                 )
         
         if st.button("💾 Save Profile"):
+            # Get current experience list (may have been updated in the employment history section)
+            current_experience = st.session_state["user_profile"].get("experience", [])
+            if not isinstance(current_experience, list):
+                current_experience = []
+            
             st.session_state["user_profile"] = {
                 "name": name if name else None,
                 "headline": headline if headline else None,
                 "summary": summary if summary else None,
                 "skills": [s.strip() for s in skills_text.split(",") if s.strip()],
-                "experience": profile.get("experience", []),
+                "experience": current_experience,  # Preserve employment history
                 "education": profile.get("education", []),
                 "target_roles": [r.strip() for r in target_roles_text.split(",") if r.strip()],
                 "experience_level": experience_level if experience_level else None,
